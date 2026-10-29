@@ -43,9 +43,9 @@ export function makeFinalPass(): ShaderPass {
         col.g = texture2D(tDiffuse, uv).g;
         col.b = texture2D(tDiffuse, uv - ca).b;
 
-        // виньетка: комната тонет по краям
-        float vig = 1.0 - smoothstep(0.10, 0.55, r2);
-        col *= mix(0.25, 1.0, vig);
+        // виньетка: комната тонет по краям, но экран монитора не должна съедать
+        float vig = 1.0 - smoothstep(0.18, 0.75, r2);
+        col *= mix(0.35, 1.0, vig);
 
         // зерно и мелкая дрожь экспозиции
         float g = hash(uv * uRes + fract(uTime) * 91.7);

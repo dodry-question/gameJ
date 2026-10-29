@@ -12,6 +12,14 @@ export const DESKTOP_H = 720
 const TASKBAR = 30
 const TITLE = 20
 
+/** Сколько «грузится» программа: браузер тяжелее блокнота. */
+const LAUNCH_MS: Record<string, number> = {
+  browser: 1500,
+  mail: 1100,
+  computer: 550,
+  trash: 450,
+}
+
 type Win = {
   key: string
   app: App
@@ -66,6 +74,8 @@ export class Desktop {
   private drag: { win: Win; ox: number; oy: number } | null = null
   private grain: CanvasPattern | null = null
   private lastMinute = -1
+  private pointer = { x: DESKTOP_W / 2, y: DESKTOP_H / 2, over: false }
+  private pending: { key: string; end: number } | null = null
 
   constructor(sound: Sound) {
     this.sound = sound
@@ -77,12 +87,16 @@ export class Desktop {
     this.canvas = canvas
     this.ctx = ctx
     this.grain = this.makeGrain(ctx)
-    this.open('browser', true)
   }
 
   // ── жизненный цикл ───────────────────────────────────────────────
 
   tick(): void {
+    if (this.pending && performance.now() >= this.pending.end) {
+      const key = this.pending.key
+      this.pending = null
+      this.spawn(key)
+    }
     const minute = new Date().getMinutes()
     if (minute !== this.lastMinute) {
       this.lastMinute = minute
@@ -105,6 +119,7 @@ export class Desktop {
 
     this.drawTaskbar()
     if (this.startOpen) this.drawStartMenu()
+    this.drawCursor()
     this.scanlines()
   }
 
@@ -154,34 +169,45 @@ export class Desktop {
     return new Note('Корзина', ['Корзина пуста.', '', 'Здесь ничего нет. Пока.'])
   }
 
-  private open(key: string, silent = false): void {
+  private open(key: string): void {
     const existing = this.windows.find((w) => w.key === key)
     if (existing) {
       existing.min = false
       this.raise(existing)
-    } else {
-      let app = this.cache.get(key)
-      if (!app) {
-        app = this.makeApp(key)
-        this.cache.set(key, app)
-      }
-      const s = SIZES[key] ?? { x: 260, y: 160, w: 340, h: 200 }
-      this.windows.push({
-        key,
-        app,
-        x: s.x,
-        y: s.y,
-        w: s.w,
-        h: s.h,
-        z: ++this.zTop,
-        min: false,
-        max: false,
-        restore: null,
-      })
+      this.startOpen = false
+      this.dirty = true
+      this.sound.open()
+      return
     }
+    if (this.pending) return
     this.startOpen = false
+    // Настоящая винда не открывает окно мгновенно: пока грузится — песочные часы.
+    this.pending = { key, end: performance.now() + (LAUNCH_MS[key] ?? 700) }
+    this.sound.busy()
     this.dirty = true
-    if (!silent) this.sound.open()
+  }
+
+  private spawn(key: string): void {
+    let app = this.cache.get(key)
+    if (!app) {
+      app = this.makeApp(key)
+      this.cache.set(key, app)
+    }
+    const s = SIZES[key] ?? { x: 260, y: 160, w: 340, h: 200 }
+    this.windows.push({
+      key,
+      app,
+      x: s.x,
+      y: s.y,
+      w: s.w,
+      h: s.h,
+      z: ++this.zTop,
+      min: false,
+      max: false,
+      restore: null,
+    })
+    this.dirty = true
+    this.sound.open()
   }
 
   private close(win: Win): void {
@@ -418,9 +444,83 @@ export class Desktop {
     }
   }
 
+  // ── курсор ───────────────────────────────────────────────────────
+
+  /** Курсор рисуется в текстуре экрана, поэтому живёт под scanlines, как в CRT. */
+  private drawCursor(): void {
+    const { x, y, over } = this.pointer
+    if (!over) return
+    if (x < 0 || y < 0 || x >= DESKTOP_W || y >= DESKTOP_H) return
+    if (this.pending) this.drawHourglass(x, y)
+    else this.drawArrow(x, y)
+  }
+
+  private drawArrow(x: number, y: number): void {
+    const ctx = this.ctx
+    ctx.save()
+    ctx.beginPath()
+    ctx.moveTo(x, y)
+    ctx.lineTo(x, y + 16)
+    ctx.lineTo(x + 4.2, y + 12.6)
+    ctx.lineTo(x + 6.6, y + 18.2)
+    ctx.lineTo(x + 9.2, y + 16.9)
+    ctx.lineTo(x + 6.8, y + 11.4)
+    ctx.lineTo(x + 12, y + 11.4)
+    ctx.closePath()
+    ctx.fillStyle = '#ffffff'
+    ctx.fill()
+    ctx.strokeStyle = '#000000'
+    ctx.lineWidth = 1.2
+    ctx.lineJoin = 'round'
+    ctx.stroke()
+    ctx.restore()
+  }
+
+  /** Песочные часы Windows 2000: чёрный контур, белый корпус, чёрный песок. */
+  private drawHourglass(x: number, y: number): void {
+    const ctx = this.ctx
+    const w = 6.5
+    const h = 11
+    ctx.save()
+    ctx.beginPath()
+    ctx.moveTo(x - w, y - h)
+    ctx.lineTo(x + w, y - h)
+    ctx.lineTo(x + 0.9, y)
+    ctx.lineTo(x + w, y + h)
+    ctx.lineTo(x - w, y + h)
+    ctx.lineTo(x - 0.9, y)
+    ctx.closePath()
+    ctx.fillStyle = '#ffffff'
+    ctx.fill()
+    ctx.strokeStyle = '#000000'
+    ctx.lineWidth = 1.2
+    ctx.lineJoin = 'round'
+    ctx.stroke()
+
+    ctx.fillStyle = '#000000'
+    ctx.beginPath()
+    ctx.moveTo(x - w + 1.2, y - h + 1.6)
+    ctx.lineTo(x + w - 1.2, y - h + 1.6)
+    ctx.lineTo(x + 0.5, y - h * 0.4)
+    ctx.lineTo(x - 0.5, y - h * 0.4)
+    ctx.closePath()
+    ctx.fill()
+    ctx.beginPath()
+    ctx.moveTo(x - w + 1.2, y + h - 1.6)
+    ctx.lineTo(x + w - 1.2, y + h - 1.6)
+    ctx.lineTo(x + 0.5, y + h * 0.3)
+    ctx.lineTo(x - 0.5, y + h * 0.3)
+    ctx.closePath()
+    ctx.fill()
+    ctx.restore()
+  }
+
   // ── ввод ─────────────────────────────────────────────────────────
 
   pointerDown(x: number, y: number): void {
+    this.pointer.x = x
+    this.pointer.y = y
+    this.pointer.over = true
     if (this.startOpen) {
       const { rect, items } = this.menuLayout()
       if (inside(rect, x, y)) {
@@ -444,7 +544,7 @@ export class Desktop {
       if (x < 76) {
         this.startOpen = !this.startOpen
         this.dirty = true
-        this.sound.click()
+        this.sound.menu()
         return
       }
       let bx = 79
@@ -530,11 +630,22 @@ export class Desktop {
   }
 
   pointerMove(x: number, y: number): void {
+    if (x !== this.pointer.x || y !== this.pointer.y || !this.pointer.over) this.dirty = true
+    this.pointer.x = x
+    this.pointer.y = y
+    this.pointer.over = true
     if (!this.drag) return
     const { win, ox, oy } = this.drag
     if (win.max) return
     win.x = Math.max(-win.w + 90, Math.min(DESKTOP_W - 90, x - ox))
     win.y = Math.max(0, Math.min(DESKTOP_H - TASKBAR - 26, y - oy))
+    this.dirty = true
+  }
+
+  /** Мышь ушла с экрана монитора — курсор на столе больше не рисуем. */
+  pointerOut(): void {
+    if (!this.pointer.over) return
+    this.pointer.over = false
     this.dirty = true
   }
 

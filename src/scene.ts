@@ -28,8 +28,8 @@ export class Room {
   private monitor = new THREE.Group()
   private raycaster = new THREE.Raycaster()
   private plane = new THREE.Plane(new THREE.Vector3(0, 0, 1), -SCREEN_Z)
-  private eye = new THREE.Vector3(0, 0.28, 0.55)
-  private target = new THREE.Vector3(0, 0.13, 0.05)
+  private eye = new THREE.Vector3(0, 0.255, 0.42)
+  private target = new THREE.Vector3(0, 0.195, 0.07)
   private look = new THREE.Vector2()
   private clock = 0
 
@@ -42,7 +42,7 @@ export class Room {
     this.scene.background = new THREE.Color(0x05070a)
     this.scene.fog = new THREE.FogExp2(0x05070a, 0.5)
 
-    this.camera = new THREE.PerspectiveCamera(50, 1, 0.01, 20)
+    this.camera = new THREE.PerspectiveCamera(46, 1, 0.01, 20)
     this.camera.position.copy(this.eye)
     this.camera.lookAt(this.target)
 
@@ -76,8 +76,9 @@ export class Room {
         depthWrite: false,
       }),
     )
-    this.glow.scale.set(0.52, 0.42, 1)
-    this.glow.position.set(0, SCREEN_Y, SCREEN_Z + 0.005)
+    this.glow.scale.set(0.9, 0.75, 1)
+    // За корпусом монитора: светящееся пятно на стене, а не плёнка поверх экрана.
+    this.glow.position.set(0, SCREEN_Y, SCREEN_Z - 0.28)
     this.monitor.add(this.glow)
 
     const bulb = this.buildBulb()
@@ -231,16 +232,18 @@ export class Room {
     for (let i = 0; i < count; i++) {
       pos[i * 3] = (Math.random() - 0.5) * 2.6
       pos[i * 3 + 1] = Math.random() * 1.8 - 0.6
-      pos[i * 3 + 2] = Math.random() * 2.2 - 1.4
+      // ближе 20 см к объективу не сыплем: иначе пылинка превращается в пятно
+      pos[i * 3 + 2] = Math.random() * 1.7 - 1.5
       vel[i] = 0.006 + Math.random() * 0.02
     }
     const geo = new THREE.BufferGeometry()
     geo.setAttribute('position', new THREE.BufferAttribute(pos, 3))
     const mat = new THREE.PointsMaterial({
+      map: dustTexture(),
       color: 0xbdd7dd,
-      size: 0.0045,
+      size: 0.006,
       transparent: true,
-      opacity: 0.5,
+      opacity: 0.4,
       depthWrite: false,
       blending: THREE.AdditiveBlending,
     })
@@ -278,9 +281,9 @@ export class Room {
 
     // параллакс: чуть смещаемся за мышью, плюс дыхание
     const k = 1 - Math.pow(0.001, dt)
-    this.camera.position.x += (this.eye.x + this.look.x * 0.018 - this.camera.position.x) * k
+    this.camera.position.x += (this.eye.x + this.look.x * 0.012 - this.camera.position.x) * k
     this.camera.position.y +=
-      (this.eye.y + this.look.y * 0.011 + Math.sin(t * 0.9) * 0.0012 - this.camera.position.y) * k
+      (this.eye.y + this.look.y * 0.008 + Math.sin(t * 0.9) * 0.0012 - this.camera.position.y) * k
     this.camera.lookAt(this.target)
 
     // мерцание экрана
@@ -289,7 +292,7 @@ export class Room {
     const lum = Math.max(0.85, 1 - dip * 0.15) * flick
     this.screenLight.intensity = 0.22 * lum
     this.screenMat.color.setRGB(0.98 * lum, 0.99 * lum, lum)
-    this.glow.material.opacity = 0.14 * lum
+    this.glow.material.opacity = 0.12 * lum
 
     // лампа на проводе
     const swing = 0.45 + 0.1 * Math.sin(t * 1.7) + 0.04 * Math.sin(t * 9.3)
@@ -412,6 +415,23 @@ function keyTexture(): THREE.CanvasTexture {
   return tex
 }
 
+/** Круглая пылинка: без текстуры Points рисует квадраты, а вблизи это видно. */
+function dustTexture(): THREE.CanvasTexture {
+  const s = 32
+  const c = document.createElement('canvas')
+  c.width = s
+  c.height = s
+  const g = c.getContext('2d')
+  if (!g) throw new Error('canvas 2d недоступен')
+  const grad = g.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s / 2)
+  grad.addColorStop(0, 'rgba(255, 255, 255, 1)')
+  grad.addColorStop(0.35, 'rgba(255, 255, 255, 0.5)')
+  grad.addColorStop(1, 'rgba(255, 255, 255, 0)')
+  g.fillStyle = grad
+  g.fillRect(0, 0, s, s)
+  return new THREE.CanvasTexture(c)
+}
+
 function glowTexture(): THREE.CanvasTexture {
   const s = 128
   const c = document.createElement('canvas')
@@ -421,7 +441,10 @@ function glowTexture(): THREE.CanvasTexture {
   if (!g) throw new Error('canvas 2d недоступен')
   const grad = g.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s / 2)
   grad.addColorStop(0, 'rgba(255, 255, 255, 1)')
-  grad.addColorStop(0.45, 'rgba(170, 200, 230, 0.35)')
+  grad.addColorStop(0.18, 'rgba(214, 230, 245, 0.72)')
+  grad.addColorStop(0.42, 'rgba(170, 200, 230, 0.34)')
+  grad.addColorStop(0.68, 'rgba(140, 175, 210, 0.12)')
+  grad.addColorStop(0.88, 'rgba(120, 155, 190, 0.03)')
   grad.addColorStop(1, 'rgba(0, 0, 0, 0)')
   g.fillStyle = grad
   g.fillRect(0, 0, s, s)

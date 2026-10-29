@@ -9,7 +9,7 @@ import './style.css'
 import * as THREE from 'three'
 import { GAME } from './config'
 import { Room } from './scene'
-import { Desktop } from './desktop/desktop'
+import { Desktop, DESKTOP_H, DESKTOP_W } from './desktop/desktop'
 import { Sound } from './audio'
 
 document.title = `${GAME.title} — ${GAME.tagline}`
@@ -50,7 +50,19 @@ function run(room: Room): void {
     aim(e)
     room.setPointer(ndc.x, ndc.y)
     const p = pressed ? room.pickLoose(ndc) : room.pick(ndc)
-    if (p) desktop.pointerMove(p.x, p.y)
+    if (p && p.x >= 0 && p.y >= 0 && p.x < DESKTOP_W && p.y < DESKTOP_H) {
+      // Системную стрелку прячем: на экране монитора живёт нарисованный курсор.
+      host.style.cursor = 'none'
+      desktop.pointerMove(p.x, p.y)
+    } else {
+      host.style.cursor = 'default'
+      desktop.pointerOut()
+    }
+  })
+
+  host.addEventListener('pointerleave', () => {
+    host.style.cursor = 'default'
+    desktop.pointerOut()
   })
 
   host.addEventListener('pointerdown', (e) => {
