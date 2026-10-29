@@ -1,23 +1,15 @@
 <!doctype html>
-<html lang="ru" data-theme="neon">
+<html lang="ru">
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <meta name="color-scheme" content="dark light" />
+    <meta name="color-scheme" content="dark" />
     <title>UNTITLED</title>
   </head>
   <body>
-    <div class="app">
-      <!-- Плоский фон: сплошной цвет + тонкая сетка. Цвета берутся из текущего скина -->
-      <div class="bg" aria-hidden="true">
-        <span class="bg-grid"></span>
-      </div>
-
-      <!-- Сюда JS переключает экраны: меню / настройки / об игре / игра -->
-      <main id="screen" class="screen" tabindex="-1"></main>
-    </div>
-
+    <!-- Пустой контейнер: сюда игра смонтирует canvas и свой интерфейс. -->
+    <div id="app"></div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
