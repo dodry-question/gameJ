@@ -1,5 +1,6 @@
 import { C, bevel, fill, inside, panel, setFont, text } from './draw'
 import type { Rect } from './draw'
+import { drawIcon } from './icons'
 import type { App } from './app'
 import { Browser } from './apps/browser'
 import { Mail } from './apps/mail'
@@ -51,7 +52,7 @@ const ICONS: Array<{ label: string; key: string }> = [
 
 const START_MENU: MenuItem[] = [
   { label: 'Почта', key: 'mail' },
-  { label: 'Обозреватель', key: 'browser' },
+  { label: 'Netscape Navigator', key: 'browser' },
   null,
   { label: 'Документы' },
   { label: 'Настройки' },
@@ -322,7 +323,7 @@ export class Desktop {
   // ── иконки ───────────────────────────────────────────────────────
 
   private iconRect(i: number): Rect {
-    return { x: 14, y: 12 + i * 84, w: 84, h: 78 }
+    return { x: 10, y: 8 + i * 94, w: 88, h: 92 }
   }
 
   private drawIcons(): void {
@@ -333,9 +334,9 @@ export class Desktop {
         ctx.fillStyle = 'rgba(20, 40, 60, 0.45)'
         ctx.fillRect(r.x, r.y, r.w, r.h)
       }
-      this.drawGlyph(icon.key, r.x + r.w / 2, r.y + 30)
+      drawIcon(ctx, icon.key, r.x + r.w / 2, r.y + 32)
       if (icon.key === 'mail' && this.hasNewMail) {
-        const badge: Rect = { x: r.x + r.w / 2 + 10, y: r.y + 14, w: 15, h: 14 }
+        const badge: Rect = { x: r.x + r.w / 2 + 16, y: r.y + 4, w: 16, h: 15 }
         fill(ctx, badge, C.alert)
         ctx.strokeStyle = '#1a1a14'
         ctx.strokeRect(badge.x + 0.5, badge.y + 0.5, badge.w - 1, badge.h - 1)
@@ -349,55 +350,13 @@ export class Desktop {
 
       setFont(ctx, 11)
       const lines = icon.label.split(' ')
-      let y = r.y + 56
+      let y = r.y + 70
       for (const line of lines) {
         text(ctx, line, r.x + r.w / 2 + 1, y + 1, { size: 11, color: '#000000', align: 'center' })
         text(ctx, line, r.x + r.w / 2, y, { size: 11, color: C.deskText, align: 'center' })
         y += 13
       }
     })
-  }
-
-  private drawGlyph(key: string, cx: number, cy: number): void {
-    const ctx = this.ctx
-    ctx.save()
-    ctx.translate(cx, cy)
-    if (key === 'mail') {
-      fill(ctx, { x: -21, y: -14, w: 42, h: 28 }, '#d9d4c0')
-      ctx.strokeStyle = '#3a3a32'
-      ctx.strokeRect(-20.5, -13.5, 41, 27)
-      ctx.beginPath()
-      ctx.moveTo(-20, -13)
-      ctx.lineTo(0, 2)
-      ctx.lineTo(20, -13)
-      ctx.stroke()
-    } else if (key === 'browser') {
-      ctx.fillStyle = '#1d3f74'
-      ctx.beginPath()
-      ctx.arc(0, 0, 17, 0, Math.PI * 2)
-      ctx.fill()
-      ctx.strokeStyle = '#9fc3e8'
-      ctx.beginPath()
-      ctx.ellipse(0, 0, 7, 17, 0, 0, Math.PI * 2)
-      ctx.moveTo(-17, 0)
-      ctx.lineTo(17, 0)
-      ctx.stroke()
-    } else if (key === 'computer') {
-      fill(ctx, { x: -21, y: -16, w: 42, h: 30 }, '#8d8a80')
-      fill(ctx, { x: -17, y: -12, w: 34, h: 22 }, '#123027')
-      ctx.strokeStyle = '#2b2b25'
-      ctx.strokeRect(-20.5, -15.5, 41, 29)
-      fill(ctx, { x: -7, y: 14, w: 14, h: 4 }, '#6f6c63')
-    } else {
-      fill(ctx, { x: -14, y: -10, w: 28, h: 26 }, '#5b5f5c')
-      fill(ctx, { x: -17, y: -15, w: 34, h: 5 }, '#777c78')
-      ctx.strokeStyle = '#23231f'
-      ctx.beginPath()
-      ctx.moveTo(-14, -9)
-      ctx.lineTo(14, -9)
-      ctx.stroke()
-    }
-    ctx.restore()
   }
 
   // ── панель задач и меню ──────────────────────────────────────────
