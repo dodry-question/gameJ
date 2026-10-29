@@ -1,6 +1,6 @@
 /**
- * Звук без ассетов: системные звуки Windows 2000, собранные из осцилляторов
- * и шума, плюс гул комнаты. Сэмплов нет — билд не тяжелеет.
+ * Звук: системные звуки Windows 2000, собранные из осцилляторов и шума,
+ * плюс зацикленный эмбиент комнаты из файла.
  *
  * Почему не квадратные пищалки: у Win2000 звуки колокольчиковые (FM-синтез)
  * с короткой реверберацией, а клики мыши — мягкие шумовые тики.
@@ -10,6 +10,10 @@ export class Sound {
   private ctx: AudioContext | null = null
   private master: GainNode | null = null
   private noise: AudioBuffer | null = null
+  private modem: AudioBuffer | null = null
+  private modemLoading = false
+  private ambient: AudioBuffer | null = null
+  private ambientLoading = false
   private started = false
 
   /** Вызывать на первом клике: браузеры не дают создать звук раньше. */
@@ -35,7 +39,9 @@ export class Sound {
       this.ctx = ctx
       this.master = master
       this.noise = noiseBuffer(ctx)
-      this.hum(ctx, master)
+      this.loadAmbient()
+      this.loadModem()
+      this.scheduleModem(28 + Math.random() * 26)
       void ctx.resume()
     } catch {
       this.ctx = null
@@ -43,41 +49,42 @@ export class Sound {
     }
   }
 
-  /** Низкий гул вентиляции + случайные удары где-то в здании. */
-  private hum(ctx: AudioContext, out: GainNode): void {
-    const len = ctx.sampleRate * 4
-    const buf = ctx.createBuffer(1, len, ctx.sampleRate)
-    const data = buf.getChannelData(0)
-    for (let i = 0; i < len; i++) data[i] = (Math.random() * 2 - 1) * 0.35
+  // ── эмбиент комнаты ──────────────────────────────────────────────
 
-    const noise = ctx.createBufferSource()
-    noise.buffer = buf
-    noise.loop = true
+  /**
+   * Основной эмбиент — запись нашего звуковика (public/sounds/ambient.ogg).
+   * Грузим после первого клика: раньше браузер всё равно не даст звук.
+   */
+  private loadAmbient(): void {
+    if (this.ambient || this.ambientLoading) return
+    const ctx = this.ctx
+    if (!ctx) return
+    this.ambientLoading = true
+    fetch('sounds/ambient.ogg')
+      .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error('нет файла'))))
+      .then((buffers) => ctx.decodeAudioData(buffers))
+      .then((buf) => {
+        this.ambient = buf
+        this.startAmbient(ctx, buf)
+      })
+      .catch(() => {
+        // без Ogg (Safari) или без файла живём в тишине
+      })
+  }
 
-    const lp = ctx.createBiquadFilter()
-    lp.type = 'lowpass'
-    lp.frequency.value = 120
-    lp.Q.value = 1.2
-
+  private startAmbient(ctx: AudioContext, buf: AudioBuffer): void {
+    const out = this.master
+    if (!out) return
+    const src = ctx.createBufferSource()
+    src.buffer = buf
+    src.loop = true
     const g = ctx.createGain()
-    g.gain.value = 0.06
-
-    noise.connect(lp).connect(g).connect(out)
-    noise.start()
-
-    const osc = ctx.createOscillator()
-    osc.type = 'sine'
-    osc.frequency.value = 49
-    const og = ctx.createGain()
-    og.gain.value = 0.02
-    osc.connect(og).connect(out)
-    osc.start()
-
-    const thud = () => {
-      this.thud()
-      window.setTimeout(thud, 11000 + Math.random() * 16000)
-    }
-    window.setTimeout(thud, 9000)
+    const t = ctx.currentTime
+    // тихо и с плавным входом: фон не должен «щёлкать»
+    g.gain.setValueAtTime(0.0001, t)
+    g.gain.linearRampToValueAtTime(0.2, t + 2.5)
+    src.connect(g).connect(out)
+    src.start(t)
   }
 
   // ── синтез ───────────────────────────────────────────────────────
@@ -201,8 +208,54 @@ export class Sound {
     this.tone(52, 0.5, 'sine', 0.012)
   }
 
-  private thud(): void {
-    this.tone(58, 0.6, 'sine', 0.06, 34)
+  // ── модем ────────────────────────────────────────────────────────
+
+  /**
+   * Оригинальная запись dial-up хендшейка: Wikimedia Commons,
+   * «Dial up modem noises.ogg», public domain.
+   * Грузим лениво и играем редко — это фон, а не событие.
+   */
+  private loadModem(): void {
+    if (this.modem || this.modemLoading) return
+    const ctx = this.ctx
+    if (!ctx) return
+    this.modemLoading = true
+    fetch('sounds/modem.ogg')
+      .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error('нет файла'))))
+      .then((buffers) => ctx.decodeAudioData(buffers))
+      .then((buf) => {
+        this.modem = buf
+      })
+      .catch(() => {
+        // без Ogg (Safari) или без файла просто живём без модема
+      })
+  }
+
+  private scheduleModem(delaySec: number): void {
+    window.setTimeout(() => {
+      this.playModem()
+      this.scheduleModem(110 + Math.random() * 150)
+    }, delaySec * 1000)
+  }
+
+  private playModem(): void {
+    const ctx = this.ctx
+    const out = this.master
+    if (!ctx || !out || !this.modem) return
+    const src = ctx.createBufferSource()
+    src.buffer = this.modem
+    // тихо и глухо: модем «за стеной», а не в наушниках
+    const lp = ctx.createBiquadFilter()
+    lp.type = 'lowpass'
+    lp.frequency.value = 3400
+    const env = ctx.createGain()
+    const t = ctx.currentTime
+    env.gain.setValueAtTime(0.0001, t)
+    env.gain.linearRampToValueAtTime(0.1, t + 1.2)
+    env.gain.setValueAtTime(0.1, t + Math.max(1.3, this.modem.duration - 1.6))
+    env.gain.linearRampToValueAtTime(0.0001, t + this.modem.duration)
+    src.connect(lp).connect(env).connect(out)
+    src.start(t)
   }
 }
 

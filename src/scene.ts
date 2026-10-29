@@ -40,7 +40,7 @@ export class Room {
     host.appendChild(this.renderer.domElement)
 
     this.scene.background = new THREE.Color(0x05070a)
-    this.scene.fog = new THREE.FogExp2(0x05070a, 0.5)
+    this.scene.fog = new THREE.FogExp2(0x05070a, 0.22)
 
     this.camera = new THREE.PerspectiveCamera(46, 1, 0.01, 20)
     this.camera.position.copy(this.eye)
@@ -100,30 +100,114 @@ export class Room {
   // ── геометрия сцены ──────────────────────────────────────────────
 
   private buildRoom(): void {
-    const concrete = concreteTexture()
+    const paper = wallpaperTexture()
+    const lino = linoleumTexture()
+    const wall = new THREE.MeshStandardMaterial({
+      map: paper,
+      // слабая самосветимость: обои должны читаться в темноте, иначе комната — чёрный фон
+      emissiveMap: paper,
+      emissive: 0x6b6250,
+      emissiveIntensity: 0.5,
+      color: 0x9d968a,
+      roughness: 1,
+      side: THREE.BackSide,
+    })
+    const ceilingMat = new THREE.MeshStandardMaterial({
+      color: 0x3f3c36,
+      emissive: 0x161411,
+      emissiveIntensity: 0.4,
+      roughness: 1,
+      side: THREE.BackSide,
+    })
+    const floorMat = new THREE.MeshStandardMaterial({
+      map: lino,
+      emissiveMap: lino,
+      emissive: 0x3f3328,
+      emissiveIntensity: 0.4,
+      color: 0x6d655c,
+      roughness: 0.85,
+      side: THREE.BackSide,
+    })
 
-    const walls = new THREE.Mesh(
-      new THREE.BoxGeometry(4.4, 2.4, 3.6),
-      new THREE.MeshStandardMaterial({ map: concrete, color: 0x8f8f8f, roughness: 1, side: THREE.BackSide }),
-    )
+    // порядок граней бокса: +x, -x, +y, -y, +z, -z
+    const walls = new THREE.Mesh(new THREE.BoxGeometry(4.4, 2.4, 3.6), [
+      wall,
+      wall,
+      ceilingMat,
+      floorMat,
+      wall,
+      wall,
+    ])
     walls.position.set(0, 0.45, -1)
     this.scene.add(walls)
 
-    this.scene.add(new THREE.AmbientLight(0x141c26, 0.55))
-    this.scene.add(new THREE.HemisphereLight(0x0e1a22, 0x050505, 0.25))
+    this.scene.add(new THREE.AmbientLight(0x141c26, 0.7))
+    this.scene.add(new THREE.HemisphereLight(0x0e1a22, 0x050505, 0.3))
 
     // лампа где-то над столом, вне кадра: даёт объём комнате
     const ceiling = new THREE.PointLight(0x6d8ba0, 0.8, 3.6, 2)
     ceiling.position.set(-0.2, 1.5, 0.3)
     this.scene.add(ceiling)
 
+    this.buildWindow()
+    this.buildRadiator()
+
+    // плинтус: голая стена без него выглядит как декорация
+    const skirt = new THREE.Mesh(
+      new THREE.BoxGeometry(4.36, 0.07, 0.02),
+      new THREE.MeshStandardMaterial({ color: 0x2e2a25, roughness: 1 }),
+    )
+    skirt.position.set(0, 0.02, -2.79)
+    this.scene.add(skirt)
+
     // решётка вентиляции на дальней стене — силуэт, чтобы комната не была пустой
     const grate = new THREE.Mesh(
       new THREE.BoxGeometry(0.6, 0.4, 0.02),
       new THREE.MeshStandardMaterial({ color: 0x1a1c1e, roughness: 1 }),
     )
-    grate.position.set(-1.1, 0.9, -2.78)
+    grate.position.set(0.95, 1.05, -2.78)
     this.scene.add(grate)
+  }
+
+  /** Окно хрущёвки: тёмный двор, панелька напротив, пара чужих окон горит. */
+  private buildWindow(): void {
+    const frameMat = new THREE.MeshStandardMaterial({ color: 0x3c3730, roughness: 0.9 })
+    const frame = new THREE.Mesh(new THREE.BoxGeometry(1.08, 1.24, 0.05), frameMat)
+    frame.position.set(-1.12, 0.95, -2.79)
+    this.scene.add(frame)
+
+    const glass = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.96, 1.12),
+      new THREE.MeshBasicMaterial({ map: windowTexture() }),
+    )
+    glass.position.set(-1.12, 0.95, -2.76)
+    this.scene.add(glass)
+
+    // переплёт: две вертикальные и одна горизонтальная планка
+    const sashV = new THREE.BoxGeometry(0.03, 1.12, 0.03)
+    const sash = new THREE.Mesh(sashV, frameMat)
+    sash.position.set(-1.12, 0.95, -2.755)
+    this.scene.add(sash)
+    const sashH = new THREE.Mesh(new THREE.BoxGeometry(0.96, 0.03, 0.03), frameMat)
+    sashH.position.set(-1.12, 0.95, -2.755)
+    this.scene.add(sashH)
+
+    // холодный свет с улицы: единственный источник, который не жалко
+    const street = new THREE.PointLight(0x7d9cc4, 0.9, 4.6, 2)
+    street.position.set(-1.12, 1.0, -2.45)
+    this.scene.add(street)
+  }
+
+  /** Чугунная батарея под окном — обязательный атрибут. */
+  private buildRadiator(): void {
+    const metal = new THREE.MeshStandardMaterial({ color: 0x5b5850, roughness: 0.85 })
+    const fins = new THREE.Group()
+    for (let i = 0; i < 11; i++) {
+      const fin = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.4, 0.09), metal)
+      fin.position.set(-1.62 + i * 0.09, 0.34, -2.72)
+      fins.add(fin)
+    }
+    this.scene.add(fins)
   }
 
   private buildDesk(): void {
@@ -279,11 +363,11 @@ export class Room {
     this.clock += dt
     const t = this.clock
 
-    // параллакс: чуть смещаемся за мышью, плюс дыхание
-    const k = 1 - Math.pow(0.001, dt)
-    this.camera.position.x += (this.eye.x + this.look.x * 0.012 - this.camera.position.x) * k
+    // параллакс: еле заметный, чтобы экран не качался как лодка
+    const k = 1 - Math.pow(0.06, dt)
+    this.camera.position.x += (this.eye.x + this.look.x * 0.0045 - this.camera.position.x) * k
     this.camera.position.y +=
-      (this.eye.y + this.look.y * 0.008 + Math.sin(t * 0.9) * 0.0012 - this.camera.position.y) * k
+      (this.eye.y + this.look.y * 0.003 + Math.sin(t * 0.55) * 0.0004 - this.camera.position.y) * k
     this.camera.lookAt(this.target)
 
     // мерцание экрана
@@ -358,36 +442,157 @@ export class Room {
 
 // ── процедурные текстуры ───────────────────────────────────────────
 
-function concreteTexture(): THREE.CanvasTexture {
+/** Обои хрущёвки: выцветшие полосы, разводы, отслоившиеся куски. */
+function wallpaperTexture(): THREE.CanvasTexture {
+  const s = 384
+  const c = document.createElement('canvas')
+  c.width = s
+  c.height = s
+  const g = c.getContext('2d')
+  if (!g) throw new Error('canvas 2d недоступен')
+
+  g.fillStyle = '#6b6659'
+  g.fillRect(0, 0, s, s)
+
+  // вертикальные полосы
+  for (let x = 0; x < s; x += 24) {
+    g.fillStyle = (x / 24) % 2 === 0 ? 'rgba(126, 120, 103, 0.5)' : 'rgba(92, 88, 76, 0.45)'
+    g.fillRect(x, 0, 12, s)
+  }
+  // мелкий выцветший узор
+  for (let i = 0; i < 260; i++) {
+    g.fillStyle = 'rgba(122, 117, 100, 0.22)'
+    g.beginPath()
+    g.arc(Math.random() * s, Math.random() * s, 1.2 + Math.random() * 2.2, 0, Math.PI * 2)
+    g.fill()
+  }
+  // потёки сверху и сырость снизу
+  for (let i = 0; i < 26; i++) {
+    const x = Math.random() * s
+    const h = 40 + Math.random() * 150
+    const grad = g.createLinearGradient(0, 0, 0, h)
+    grad.addColorStop(0, 'rgba(38, 34, 26, 0.34)')
+    grad.addColorStop(1, 'rgba(38, 34, 26, 0)')
+    g.fillStyle = grad
+    g.fillRect(x, 0, 1 + Math.random() * 3, h)
+  }
+  const damp = g.createLinearGradient(0, s * 0.55, 0, s)
+  damp.addColorStop(0, 'rgba(40, 40, 30, 0)')
+  damp.addColorStop(1, 'rgba(34, 36, 26, 0.55)')
+  g.fillStyle = damp
+  g.fillRect(0, s * 0.55, s, s * 0.45)
+
+  // отслоившаяся краска: светлые пятна с тенью снизу
+  for (let i = 0; i < 7; i++) {
+    const x = Math.random() * s
+    const y = Math.random() * s
+    const w = 14 + Math.random() * 46
+    const h = 10 + Math.random() * 30
+    g.fillStyle = 'rgba(150, 144, 128, 0.5)'
+    g.beginPath()
+    g.moveTo(x, y)
+    g.lineTo(x + w, y + Math.random() * 6)
+    g.lineTo(x + w - Math.random() * 8, y + h)
+    g.lineTo(x + Math.random() * 6, y + h - Math.random() * 5)
+    g.closePath()
+    g.fill()
+    g.fillStyle = 'rgba(24, 22, 18, 0.35)'
+    g.fillRect(x, y + h, w, 2)
+  }
+
+  const tex = new THREE.CanvasTexture(c)
+  tex.colorSpace = THREE.SRGBColorSpace
+  tex.wrapS = THREE.RepeatWrapping
+  tex.wrapT = THREE.RepeatWrapping
+  tex.repeat.set(2.5, 1)
+  return tex
+}
+
+/** Линолеум: бурый, в крапинку, со швами. */
+function linoleumTexture(): THREE.CanvasTexture {
   const s = 256
   const c = document.createElement('canvas')
   c.width = s
   c.height = s
   const g = c.getContext('2d')
   if (!g) throw new Error('canvas 2d недоступен')
-  g.fillStyle = '#3a3a34'
+  g.fillStyle = '#4b423a'
   g.fillRect(0, 0, s, s)
-  for (let i = 0; i < 1400; i++) {
-    const x = Math.random() * s
-    const y = Math.random() * s
-    const r = 1 + Math.random() * 18
-    const dark = Math.random() > 0.5
-    g.fillStyle = dark ? 'rgba(12, 14, 12, 0.10)' : 'rgba(120, 118, 104, 0.07)'
-    g.beginPath()
-    g.arc(x, y, r, 0, Math.PI * 2)
-    g.fill()
+  for (let i = 0; i < 2600; i++) {
+    g.fillStyle = Math.random() > 0.5 ? 'rgba(96, 84, 70, 0.35)' : 'rgba(28, 24, 20, 0.35)'
+    g.fillRect(Math.random() * s, Math.random() * s, 1.5, 1.5)
   }
-  // подтёки
-  for (let i = 0; i < 24; i++) {
-    const x = Math.random() * s
-    g.fillStyle = 'rgba(30, 34, 28, 0.35)'
-    g.fillRect(x, Math.random() * s * 0.4, 1 + Math.random() * 2, 30 + Math.random() * 90)
-  }
+  g.strokeStyle = 'rgba(22, 19, 16, 0.5)'
+  g.lineWidth = 2
+  g.beginPath()
+  g.moveTo(0, s * 0.5)
+  g.lineTo(s, s * 0.5)
+  g.stroke()
+
   const tex = new THREE.CanvasTexture(c)
   tex.colorSpace = THREE.SRGBColorSpace
   tex.wrapS = THREE.RepeatWrapping
   tex.wrapT = THREE.RepeatWrapping
-  tex.repeat.set(3, 2)
+  tex.repeat.set(4, 4)
+  return tex
+}
+
+/** Что видно в окне: двор, панелька напротив, три живых окна из ста. */
+function windowTexture(): THREE.CanvasTexture {
+  const w = 256
+  const h = 300
+  const c = document.createElement('canvas')
+  c.width = w
+  c.height = h
+  const g = c.getContext('2d')
+  if (!g) throw new Error('canvas 2d недоступен')
+
+  const sky = g.createLinearGradient(0, 0, 0, h)
+  sky.addColorStop(0, '#0a1420')
+  sky.addColorStop(0.55, '#12202e')
+  sky.addColorStop(1, '#0d1319')
+  g.fillStyle = sky
+  g.fillRect(0, 0, w, h)
+
+  // панелька напротив
+  g.fillStyle = '#151b20'
+  g.fillRect(18, 70, 220, 150)
+  for (let row = 0; row < 5; row++) {
+    for (let col = 0; col < 9; col++) {
+      const lit = Math.random() < 0.08
+      g.fillStyle = lit ? 'rgba(214, 170, 96, 0.75)' : 'rgba(10, 13, 16, 0.9)'
+      g.fillRect(26 + col * 24, 78 + row * 28, 14, 18)
+    }
+  }
+
+  // фонарь во дворе
+  const lamp = g.createRadialGradient(196, 236, 2, 196, 236, 46)
+  lamp.addColorStop(0, 'rgba(226, 198, 140, 0.85)')
+  lamp.addColorStop(0.35, 'rgba(200, 168, 110, 0.25)')
+  lamp.addColorStop(1, 'rgba(160, 130, 80, 0)')
+  g.fillStyle = lamp
+  g.fillRect(140, 180, 120, 120)
+
+  // голое дерево
+  g.strokeStyle = '#0b0f12'
+  g.lineWidth = 3
+  g.beginPath()
+  g.moveTo(52, 300)
+  g.lineTo(52, 214)
+  g.moveTo(52, 250)
+  g.lineTo(28, 226)
+  g.moveTo(52, 236)
+  g.lineTo(78, 216)
+  g.stroke()
+
+  // пыль и царапины на стекле
+  for (let i = 0; i < 120; i++) {
+    g.fillStyle = 'rgba(180, 190, 200, 0.06)'
+    g.fillRect(Math.random() * w, Math.random() * h, 1, 1)
+  }
+
+  const tex = new THREE.CanvasTexture(c)
+  tex.colorSpace = THREE.SRGBColorSpace
   return tex
 }
 

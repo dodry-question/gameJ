@@ -76,6 +76,9 @@ export class Desktop {
   private lastMinute = -1
   private pointer = { x: DESKTOP_W / 2, y: DESKTOP_H / 2, over: false }
   private pending: { key: string; end: number } | null = null
+  private toast: { end: number } | null = null
+  private notified = false
+  private hasNewMail = false
 
   constructor(sound: Sound) {
     this.sound = sound
@@ -87,6 +90,8 @@ export class Desktop {
     this.canvas = canvas
     this.ctx = ctx
     this.grain = this.makeGrain(ctx)
+    // Через пять секунд после входа игрок должен понять, что от него хотят.
+    window.setTimeout(() => this.notifyMail(), 5000)
   }
 
   // ── жизненный цикл ───────────────────────────────────────────────
@@ -96,6 +101,10 @@ export class Desktop {
       const key = this.pending.key
       this.pending = null
       this.spawn(key)
+    }
+    if (this.toast && performance.now() >= this.toast.end) {
+      this.toast = null
+      this.dirty = true
     }
     const minute = new Date().getMinutes()
     if (minute !== this.lastMinute) {
@@ -119,6 +128,7 @@ export class Desktop {
 
     this.drawTaskbar()
     if (this.startOpen) this.drawStartMenu()
+    if (this.toast) this.drawToast()
     this.drawCursor()
     this.scanlines()
   }
@@ -170,6 +180,10 @@ export class Desktop {
   }
 
   private open(key: string): void {
+    if (key === 'mail') {
+      this.hasNewMail = false
+      this.dirty = true
+    }
     const existing = this.windows.find((w) => w.key === key)
     if (existing) {
       existing.min = false
@@ -320,6 +334,18 @@ export class Desktop {
         ctx.fillRect(r.x, r.y, r.w, r.h)
       }
       this.drawGlyph(icon.key, r.x + r.w / 2, r.y + 30)
+      if (icon.key === 'mail' && this.hasNewMail) {
+        const badge: Rect = { x: r.x + r.w / 2 + 10, y: r.y + 14, w: 15, h: 14 }
+        fill(ctx, badge, C.alert)
+        ctx.strokeStyle = '#1a1a14'
+        ctx.strokeRect(badge.x + 0.5, badge.y + 0.5, badge.w - 1, badge.h - 1)
+        text(ctx, '1', badge.x + badge.w / 2, badge.y + badge.h / 2 + 0.5, {
+          size: 10,
+          bold: true,
+          color: '#ffffff',
+          align: 'center',
+        })
+      }
 
       setFont(ctx, 11)
       const lines = icon.label.split(' ')
@@ -444,36 +470,85 @@ export class Desktop {
     }
   }
 
+  // ── уведомление о письме ─────────────────────────────────────────
+
+  /** Новое письмо и всплывающее уведомление в стиле Win2000. */
+  private notifyMail(): void {
+    if (this.notified) return
+    this.notified = true
+    this.deliverMail()
+    this.toast = { end: performance.now() + 12000 }
+    this.hasNewMail = true
+    this.sound.message()
+    this.dirty = true
+  }
+
+  private deliverMail(): void {
+    let app = this.cache.get('mail')
+    if (!app) {
+      app = new Mail(this.sound)
+      this.cache.set('mail', app)
+    }
+    if (app instanceof Mail) app.deliver()
+    this.dirty = true
+  }
+
+  private toastRect(): Rect {
+    return { x: DESKTOP_W - 300, y: DESKTOP_H - TASKBAR - 104, w: 292, h: 96 }
+  }
+
+  private drawToast(): void {
+    const ctx = this.ctx
+    const r = this.toastRect()
+    panel(ctx, r, true, 2)
+
+    const bar: Rect = { x: r.x + 3, y: r.y + 3, w: r.w - 6, h: 16 }
+    const g = ctx.createLinearGradient(bar.x, bar.y, bar.x, bar.y + bar.h)
+    g.addColorStop(0, C.titleOn2)
+    g.addColorStop(1, C.titleOn)
+    ctx.fillStyle = g
+    ctx.fillRect(bar.x, bar.y, bar.w, bar.h)
+    text(ctx, 'Почта', bar.x + 5, bar.y + 8.5, { size: 11, bold: true, color: C.titleText })
+
+    const close: Rect = { x: r.x + r.w - 21, y: r.y + 4, w: 16, h: 14 }
+    panel(ctx, close, true, 1)
+    ctx.strokeStyle = C.text
+    ctx.lineWidth = 1
+    ctx.beginPath()
+    ctx.moveTo(close.x + 4.5, close.y + 4)
+    ctx.lineTo(close.x + 11.5, close.y + 10)
+    ctx.moveTo(close.x + 11.5, close.y + 4)
+    ctx.lineTo(close.x + 4.5, close.y + 10)
+    ctx.stroke()
+
+    // конверт
+    const ex = r.x + 14
+    const ey = r.y + 30
+    fill(ctx, { x: ex, y: ey, w: 28, h: 19 }, '#d9d4c0')
+    ctx.strokeStyle = '#3a3a32'
+    ctx.strokeRect(ex + 0.5, ey + 0.5, 27, 18)
+    ctx.beginPath()
+    ctx.moveTo(ex + 1, ey + 1)
+    ctx.lineTo(ex + 14, ey + 11)
+    ctx.lineTo(ex + 27, ey + 1)
+    ctx.stroke()
+
+    text(ctx, 'Входящие: новое сообщение', r.x + 50, r.y + 32, { size: 12, bold: true })
+    text(ctx, 'Вложение: cam04-archive.zip', r.x + 50, r.y + 50, { size: 11, color: C.alert })
+    text(ctx, 'Нажмите, чтобы открыть', r.x + 50, r.y + 68, { size: 10, color: C.textDim })
+  }
+
   // ── курсор ───────────────────────────────────────────────────────
 
   /** Курсор рисуется в текстуре экрана, поэтому живёт под scanlines, как в CRT. */
   private drawCursor(): void {
+    // Системную стрелку не подменяем: у игрока своя чувствительность и размер.
+    // Вручную рисуем только песочные часы — их в системе не заменить.
+    if (!this.pending) return
     const { x, y, over } = this.pointer
     if (!over) return
     if (x < 0 || y < 0 || x >= DESKTOP_W || y >= DESKTOP_H) return
-    if (this.pending) this.drawHourglass(x, y)
-    else this.drawArrow(x, y)
-  }
-
-  private drawArrow(x: number, y: number): void {
-    const ctx = this.ctx
-    ctx.save()
-    ctx.beginPath()
-    ctx.moveTo(x, y)
-    ctx.lineTo(x, y + 16)
-    ctx.lineTo(x + 4.2, y + 12.6)
-    ctx.lineTo(x + 6.6, y + 18.2)
-    ctx.lineTo(x + 9.2, y + 16.9)
-    ctx.lineTo(x + 6.8, y + 11.4)
-    ctx.lineTo(x + 12, y + 11.4)
-    ctx.closePath()
-    ctx.fillStyle = '#ffffff'
-    ctx.fill()
-    ctx.strokeStyle = '#000000'
-    ctx.lineWidth = 1.2
-    ctx.lineJoin = 'round'
-    ctx.stroke()
-    ctx.restore()
+    this.drawHourglass(x, y)
   }
 
   /** Песочные часы Windows 2000: чёрный контур, белый корпус, чёрный песок. */
@@ -521,6 +596,19 @@ export class Desktop {
     this.pointer.x = x
     this.pointer.y = y
     this.pointer.over = true
+
+    if (this.toast) {
+      const r = this.toastRect()
+      if (inside(r, x, y)) {
+        const close: Rect = { x: r.x + r.w - 21, y: r.y + 4, w: 16, h: 14 }
+        this.toast = null
+        this.dirty = true
+        if (inside(close, x, y)) this.sound.click()
+        else this.open('mail')
+        return
+      }
+    }
+
     if (this.startOpen) {
       const { rect, items } = this.menuLayout()
       if (inside(rect, x, y)) {
@@ -655,5 +743,10 @@ export class Desktop {
 
   isDragging(): boolean {
     return this.drag !== null
+  }
+
+  /** Идёт «загрузка» программы: на экране нужны песочные часы. */
+  isBusy(): boolean {
+    return this.pending !== null
   }
 }

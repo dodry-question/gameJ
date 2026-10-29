@@ -25,8 +25,45 @@ const desktop = new Desktop(sound)
 if (location.search.includes('ui')) {
   desktop.canvas.style.width = '960px'
   desktop.canvas.style.height = '720px'
-  document.body.appendChild(desktop.canvas)
+  host.appendChild(desktop.canvas)
   desktop.draw()
+
+  const uiPoint = (e: PointerEvent): { x: number; y: number } => {
+    const r = desktop.canvas.getBoundingClientRect()
+    return {
+      x: ((e.clientX - r.left) * DESKTOP_W) / r.width,
+      y: ((e.clientY - r.top) * DESKTOP_H) / r.height,
+    }
+  }
+  desktop.canvas.addEventListener('pointermove', (e) => {
+    const p = uiPoint(e)
+    desktop.pointerMove(p.x, p.y)
+  })
+  desktop.canvas.addEventListener('pointerleave', () => desktop.pointerOut())
+  desktop.canvas.addEventListener('pointerdown', (e) => {
+    sound.ensure()
+    const p = uiPoint(e)
+    desktop.pointerDown(p.x, p.y)
+    desktop.canvas.setPointerCapture(e.pointerId)
+  })
+  const uiRelease = (e: PointerEvent): void => {
+    desktop.pointerUp()
+    if (desktop.canvas.hasPointerCapture(e.pointerId)) desktop.canvas.releasePointerCapture(e.pointerId)
+  }
+  desktop.canvas.addEventListener('pointerup', uiRelease)
+  desktop.canvas.addEventListener('pointercancel', uiRelease)
+  desktop.canvas.addEventListener('contextmenu', (e) => e.preventDefault())
+
+  // В отладочном режиме тоже крутим тик: иначе задержки запуска и уведомление стоят.
+  const loop = (): void => {
+    desktop.tick()
+    if (desktop.dirty) {
+      desktop.dirty = false
+      desktop.draw()
+    }
+    requestAnimationFrame(loop)
+  }
+  requestAnimationFrame(loop)
 } else {
   run(new Room(host, desktop.canvas))
 }
@@ -41,9 +78,22 @@ function run(room: Room): void {
 
   const ndc = new THREE.Vector2()
   let pressed = false
+  let overScreen = false
+  let cursorHidden = false
 
   function aim(e: PointerEvent): void {
     ndc.set((e.clientX / window.innerWidth) * 2 - 1, -(e.clientY / window.innerHeight) * 2 + 1)
+  }
+
+  /**
+   * Курсор мыши оставляем системный: у игрока своя чувствительность и размер.
+   * Прячем его только пока крутятся песочные часы загрузки.
+   */
+  function syncCursor(): void {
+    const hide = overScreen && desktop.isBusy()
+    if (hide === cursorHidden) return
+    cursorHidden = hide
+    host.style.cursor = hide ? 'none' : 'default'
   }
 
   host.addEventListener('pointermove', (e) => {
@@ -51,18 +101,19 @@ function run(room: Room): void {
     room.setPointer(ndc.x, ndc.y)
     const p = pressed ? room.pickLoose(ndc) : room.pick(ndc)
     if (p && p.x >= 0 && p.y >= 0 && p.x < DESKTOP_W && p.y < DESKTOP_H) {
-      // Системную стрелку прячем: на экране монитора живёт нарисованный курсор.
-      host.style.cursor = 'none'
+      overScreen = true
       desktop.pointerMove(p.x, p.y)
     } else {
-      host.style.cursor = 'default'
+      overScreen = false
       desktop.pointerOut()
     }
+    syncCursor()
   })
 
   host.addEventListener('pointerleave', () => {
-    host.style.cursor = 'default'
+    overScreen = false
     desktop.pointerOut()
+    syncCursor()
   })
 
   host.addEventListener('pointerdown', (e) => {
@@ -71,8 +122,10 @@ function run(room: Room): void {
     const p = room.pick(ndc)
     if (!p) return
     pressed = true
+    overScreen = true
     host.setPointerCapture(e.pointerId)
     desktop.pointerDown(p.x, p.y)
+    syncCursor()
   })
 
   function release(e: PointerEvent): void {
@@ -95,6 +148,7 @@ function run(room: Room): void {
     last = now
 
     desktop.tick()
+    syncCursor()
     if (desktop.dirty) {
       desktop.dirty = false
       paintDesktop()
