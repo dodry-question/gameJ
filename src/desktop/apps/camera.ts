@@ -5,7 +5,7 @@
  * дверь» заблокирована, пока игрок не прочитает письмо: замок управляется
  * только изнутри системы.
  */
-import { bevel, fill, inside, panel, setFont, text } from '../draw'
+import { fill, inside, panel, setFont, text } from '../draw'
 import type { Rect } from '../draw'
 import type { App } from '../app'
 import type { Sound } from '../../audio'
@@ -67,15 +67,8 @@ export class Camera implements App {
     if (this.phase === 'open') {
       this.released += 0.016
       if (this.released > 4.5) this.cctv.setState('gone')
-      return true
     }
-
-    // девушка мечется: бродит, потом стучит в дверь
-    const cycle = this.t % 12
-    if (cycle < 7) this.cctv.setState('pace')
-    else if (cycle < 11) this.cctv.setState('knock')
-    else this.cctv.setState('idle')
-
+    // сценарий девушки (привязана → бродит → стучит) ведёт сам Cctv
     return true
   }
 
@@ -87,7 +80,7 @@ export class Camera implements App {
 
     // ── рамка записи ────────────────────────────────────────────────
     const head: Rect = { x: r.x + 8, y: r.y + 6, w: r.w - 16, h: 18 }
-    const footH = 78
+    const footH = 40
     const availW = r.w - 20
     const availH = r.h - 30 - footH
     let fw = Math.min(availW, Math.round((availH * 4) / 3))
@@ -118,12 +111,13 @@ export class Camera implements App {
     ctx.strokeRect(feed.x + 0.5, feed.y + 0.5, feed.w - 1, feed.h - 1)
 
     // ── шапка записи ────────────────────────────────────────────────
+    const viewNames = ['КОРИДОР, БЛОК C', 'ДВЕРЬ, БЛОК C', 'УГОЛ, БЛОК C']
     setFont(ctx, 11, true)
     ctx.fillStyle = '#8fd08f'
     ctx.textBaseline = 'middle'
     ctx.fillText('CAM 04', head.x + 2, head.y + head.h / 2)
     ctx.fillStyle = '#c9ccc6'
-    ctx.fillText('· КОРИДОР, БЛОК C', head.x + 62, head.y + head.h / 2)
+    ctx.fillText(`· ${viewNames[this.cctv.getView()]}`, head.x + 62, head.y + head.h / 2)
 
     if (Math.floor(this.t * 2) % 2 === 0) {
       ctx.fillStyle = '#c0392b'
@@ -134,32 +128,21 @@ export class Camera implements App {
     ctx.fillStyle = '#c9ccc6'
     ctx.fillText('ЗАПИСЬ', head.x + head.w - 38, head.y + head.h / 2)
 
-    // ── подвал: статус и кнопка ─────────────────────────────────────
-    const foot: Rect = { x: r.x + 8, y: feed.y + feed.h + 8, w: r.w - 16, h: footH - 12 }
-    fill(ctx, foot, '#24272a')
-    bevel(ctx, foot, false, 1)
+    // ── нижняя полоса: ракурсы слева, кнопка двери справа ───────────
+    const stripY = feed.y + feed.h + 6
+    for (let i = 0; i < 3; i++) {
+      const b: Rect = { x: r.x + 8 + i * 62, y: stripY, w: 58, h: 26 }
+      panel(ctx, b, this.cctv.getView() === i, 1)
+      setFont(ctx, 10, this.cctv.getView() === i)
+      ctx.fillStyle = this.cctv.getView() === i ? '#d8e4d0' : '#8f948d'
+      ctx.textAlign = 'center'
+      ctx.fillText(`КАМ ${i + 1}`, b.x + b.w / 2, b.y + b.h / 2 + 1)
+      ctx.textAlign = 'left'
+      const idx = i
+      this.hits.push({ r: b, fn: () => this.cctv?.setView(idx) })
+    }
 
-    const status =
-      this.phase === 'locked'
-        ? 'ЗАМОК НЕДОСТУПЕН · НЕТ КОМАНДЫ'
-        : this.phase === 'ready'
-          ? 'КАНАЛ ОТКРЫТ · МОЖНО ДАТЬ КОМАНДУ'
-          : 'ДВЕРЬ ОТКРЫТА · ОБЪЕКТ ПОКИДАЕТ КАМЕРУ'
-    setFont(ctx, 11)
-    ctx.fillStyle = this.phase === 'locked' ? '#d08a8a' : '#9fd39f'
-    ctx.fillText(status, foot.x + 10, foot.y + 16)
-
-    const hint =
-      this.phase === 'locked'
-        ? 'Прочитайте письмо в почте: доступ к замку выдаётся там.'
-        : this.phase === 'ready'
-          ? 'Девушка смотрит в камеру. Она ждёт вашего решения.'
-          : 'Она вышла. Камера пишет пустой коридор.'
-    setFont(ctx, 10)
-    ctx.fillStyle = '#8f948d'
-    ctx.fillText(hint, foot.x + 10, foot.y + 32)
-
-    const btn: Rect = { x: foot.x + foot.w - 214, y: foot.y + 12, w: 202, h: 34 }
+    const btn: Rect = { x: r.x + r.w - 214, y: r.y + r.h - 40, w: 202, h: 30 }
     const enabled = this.phase === 'ready'
     panel(ctx, btn, enabled, 2)
     setFont(ctx, 13, true)

@@ -1000,12 +1000,75 @@ export class Desktop {
   }
 
   pointerUp(): void {
+    if (this.iconDrag?.moved) this.snapIcons(this.iconDrag.ids)
     this.drag = null
     this.iconDrag = null
     if (this.band) {
       this.band = null
       this.dirty = true
     }
+  }
+
+  // ── сетка ярлыков ────────────────────────────────────────────────
+
+  private gridMax(): { cols: number; rows: number } {
+    return {
+      cols: Math.floor((DESKTOP_W - 10) / 94),
+      rows: Math.floor((DESKTOP_H - TASKBAR - 8) / 94),
+    }
+  }
+
+  /** Ячейка сетки, в которую попадает центр ярлыка. */
+  private nearestCell(x: number, y: number): { col: number; row: number } {
+    const { cols, rows } = this.gridMax()
+    return {
+      col: clamp(Math.round((x - 10) / 94), 0, cols - 1),
+      row: clamp(Math.round((y - 8) / 94), 0, rows - 1),
+    }
+  }
+
+  private cellKey(col: number, row: number): string {
+    return `${col}:${row}`
+  }
+
+  /** Ближайшая свободная ячейка к заданной: поиск по кольцам вокруг. */
+  private freeCellAround(col: number, row: number, taken: Set<string>): { col: number; row: number } {
+    const { cols, rows } = this.gridMax()
+    for (let ring = 1; ring < cols + rows; ring++) {
+      for (let dc = -ring; dc <= ring; dc++) {
+        for (let dr = -ring; dr <= ring; dr++) {
+          if (Math.max(Math.abs(dc), Math.abs(dr)) !== ring) continue
+          const c = col + dc
+          const r = row + dr
+          if (c < 0 || r < 0 || c >= cols || r >= rows) continue
+          if (!taken.has(this.cellKey(c, r))) return { col: c, row: r }
+        }
+      }
+    }
+    return { col, row }
+  }
+
+  /** Прижать перетащенные ярлыки к сетке; в занятую ячейку не ставить. */
+  private snapIcons(ids: string[]): void {
+    const taken = new Set<string>()
+    for (const icon of this.icons) {
+      if (ids.includes(icon.id)) continue
+      const c = this.nearestCell(icon.x + ICON_W / 2, icon.y + ICON_H / 2)
+      taken.add(this.cellKey(c.col, c.row))
+    }
+    const dragged = this.icons
+      .filter((i) => ids.includes(i.id))
+      .sort((a, b) => a.x - b.x || a.y - b.y)
+    for (const icon of dragged) {
+      const want = this.nearestCell(icon.x + ICON_W / 2, icon.y + ICON_H / 2)
+      const free = taken.has(this.cellKey(want.col, want.row))
+        ? this.freeCellAround(want.col, want.row, taken)
+        : want
+      taken.add(this.cellKey(free.col, free.row))
+      icon.x = 10 + free.col * 94
+      icon.y = 8 + free.row * 94
+    }
+    this.dirty = true
   }
 
   isDragging(): boolean {

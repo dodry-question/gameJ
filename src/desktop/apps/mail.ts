@@ -301,6 +301,18 @@ export class Mail implements App {
     })
   }
 
+  /** Письмо, открытое в области просмотра, считается прочитанным сразу. */
+  tick(): boolean {
+    const list = this.visible
+    const l = list[Math.min(this.selected, list.length - 1)]
+    if (l && !l.read) {
+      l.read = true
+      if (l.threat) this.onThreatRead?.()
+      return true
+    }
+    return false
+  }
+
   click(x: number, y: number, _r: Rect): void {
     for (let i = this.hits.length - 1; i >= 0; i--) {
       if (inside(this.hits[i].r, x, y)) {
