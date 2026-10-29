@@ -43,7 +43,7 @@ if (location.search.includes('ui')) {
   desktop.canvas.addEventListener('pointerdown', (e) => {
     sound.ensure()
     const p = uiPoint(e)
-    desktop.pointerDown(p.x, p.y)
+    desktop.pointerDown(p.x, p.y, e.shiftKey)
     desktop.canvas.setPointerCapture(e.pointerId)
   })
   const uiRelease = (e: PointerEvent): void => {
@@ -124,7 +124,7 @@ function run(room: Room): void {
     pressed = true
     overScreen = true
     host.setPointerCapture(e.pointerId)
-    desktop.pointerDown(p.x, p.y)
+    desktop.pointerDown(p.x, p.y, e.shiftKey)
     syncCursor()
   })
 

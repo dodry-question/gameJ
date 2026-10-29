@@ -1,8 +1,10 @@
-import { C, bevel, fill, inside, panel, setFont, text } from './draw'
+import { C, bevel, fill, inside, panel, text } from './draw'
 import type { Rect } from './draw'
 import { drawIcon } from './icons'
 import type { App } from './app'
 import { Browser } from './apps/browser'
+import { Camera } from './apps/camera'
+import { Explorer } from './apps/explorer'
 import { Mail } from './apps/mail'
 import { Note } from './apps/note'
 import type { Sound } from '../audio'
@@ -13,10 +15,15 @@ export const DESKTOP_H = 720
 const TASKBAR = 30
 const TITLE = 20
 
+/** Размер ячейки ярлыка: 64 px значок + подпись в две строки. */
+const ICON_W = 88
+const ICON_H = 92
+
 /** Сколько «грузится» программа: браузер тяжелее блокнота. */
 const LAUNCH_MS: Record<string, number> = {
   browser: 1500,
   mail: 1100,
+  camera: 1300,
   computer: 550,
   trash: 450,
 }
@@ -36,23 +43,35 @@ type Win = {
 
 type MenuItem = { label: string; key?: string } | null
 
-const SIZES: Record<string, Rect> = {
-  browser: { x: 120, y: 52, w: 640, h: 486 },
-  mail: { x: 250, y: 122, w: 620, h: 476 },
-  computer: { x: 300, y: 190, w: 350, h: 200 },
-  trash: { x: 300, y: 190, w: 350, h: 180 },
+/** Ярлык на рабочем столе. Координаты — левый верхний угол ячейки. */
+type DeskIcon = {
+  id: string
+  label: string
+  glyph: string
+  app: string
+  x: number
+  y: number
 }
 
-const ICONS: Array<{ label: string; key: string }> = [
-  { label: 'Почта', key: 'mail' },
-  { label: 'Интернет', key: 'browser' },
-  { label: 'Мой компьютер', key: 'computer' },
-  { label: 'Корзина', key: 'trash' },
+const SIZES: Record<string, Rect> = {
+  browser: { x: 120, y: 52, w: 640, h: 486 },
+  mail: { x: 250, y: 100, w: 620, h: 476 },
+  computer: { x: 280, y: 110, w: 580, h: 400 },
+  trash: { x: 300, y: 190, w: 350, h: 180 },
+  camera: { x: 236, y: 86, w: 560, h: 470 },
+}
+
+const START_ICONS: Array<Omit<DeskIcon, 'x' | 'y'>> = [
+  { id: 'mail', label: 'Почта', glyph: 'mail', app: 'mail' },
+  { id: 'browser', label: 'Интернет', glyph: 'browser', app: 'browser' },
+  { id: 'computer', label: 'Мой компьютер', glyph: 'computer', app: 'computer' },
+  { id: 'trash', label: 'Корзина', glyph: 'trash', app: 'trash' },
 ]
 
 const START_MENU: MenuItem[] = [
   { label: 'Почта', key: 'mail' },
   { label: 'Netscape Navigator', key: 'browser' },
+  { label: 'Мой компьютер', key: 'computer' },
   null,
   { label: 'Документы' },
   { label: 'Настройки' },
@@ -60,6 +79,30 @@ const START_MENU: MenuItem[] = [
   null,
   { label: 'Завершение работы…' },
 ]
+
+type IconDrag = {
+  ids: string[]
+  startX: number
+  startY: number
+  orig: Map<string, { x: number; y: number }>
+  moved: boolean
+}
+
+type Band = {
+  x0: number
+  y0: number
+  x1: number
+  y1: number
+  base: Set<string>
+}
+
+function clamp(v: number, lo: number, hi: number): number {
+  return v < lo ? lo : v > hi ? hi : v
+}
+
+function intersects(a: Rect, b: Rect): boolean {
+  return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y
+}
 
 export class Desktop {
   readonly canvas: HTMLCanvasElement
@@ -71,13 +114,25 @@ export class Desktop {
   private cache = new Map<string, App>()
   private zTop = 10
   private startOpen = false
-  private selectedIcon = -1
+
+  // ярлыки
+  private icons: DeskIcon[] = []
+  private selected = new Set<string>()
+  private iconDrag: IconDrag | null = null
+  private band: Band | null = null
+  private lastClick = { id: '', at: 0 }
+
+  // установка «вируса» и доступ к камере
+  private install: { start: number; end: number } | null = null
+  private threatSent = false
+  private cameraAccess = false
+
   private drag: { win: Win; ox: number; oy: number } | null = null
   private grain: CanvasPattern | null = null
   private lastMinute = -1
   private pointer = { x: DESKTOP_W / 2, y: DESKTOP_H / 2, over: false }
   private pending: { key: string; end: number } | null = null
-  private toast: { end: number } | null = null
+  private toast: { end: number; kind: 'mail' | 'file' } | null = null
   private notified = false
   private hasNewMail = false
 
@@ -91,6 +146,11 @@ export class Desktop {
     this.canvas = canvas
     this.ctx = ctx
     this.grain = this.makeGrain(ctx)
+    this.icons = START_ICONS.map((icon, i) => ({
+      ...icon,
+      x: 10,
+      y: 8 + i * 94,
+    }))
     // Через пять секунд после входа игрок должен понять, что от него хотят.
     window.setTimeout(() => this.notifyMail(), 5000)
   }
@@ -98,15 +158,33 @@ export class Desktop {
   // ── жизненный цикл ───────────────────────────────────────────────
 
   tick(): void {
-    if (this.pending && performance.now() >= this.pending.end) {
+    const now = performance.now()
+
+    if (this.pending && now >= this.pending.end) {
       const key = this.pending.key
       this.pending = null
       this.spawn(key)
     }
-    if (this.toast && performance.now() >= this.toast.end) {
+
+    if (this.install && now >= this.install.end) {
+      this.install = null
+      this.dropPayload()
+      this.toast = { end: now + 10000, kind: 'file' }
+      this.sound.message()
+      this.dirty = true
+    }
+
+    if (this.toast && now >= this.toast.end) {
       this.toast = null
       this.dirty = true
     }
+
+    // Анимация внутри открытых окон (камера).
+    for (const win of this.windows) {
+      if (win.min) continue
+      if (win.app.tick?.()) this.dirty = true
+    }
+
     const minute = new Date().getMinutes()
     if (minute !== this.lastMinute) {
       this.lastMinute = minute
@@ -122,6 +200,7 @@ export class Desktop {
       ctx.fillRect(0, 0, DESKTOP_W, DESKTOP_H - TASKBAR)
     }
     this.drawIcons()
+    this.drawBand()
 
     const active = this.activeWin()
     const visible = this.windows.filter((w) => !w.min).sort((a, b) => a.z - b.z)
@@ -129,6 +208,7 @@ export class Desktop {
 
     this.drawTaskbar()
     if (this.startOpen) this.drawStartMenu()
+    if (this.install) this.drawInstall()
     if (this.toast) this.drawToast()
     this.drawCursor()
     this.scanlines()
@@ -168,16 +248,24 @@ export class Desktop {
 
   private makeApp(key: string): App {
     if (key === 'browser') return new Browser(this.sound)
-    if (key === 'mail') return new Mail(this.sound)
-    if (key === 'computer') {
-      return new Note('Мой компьютер', [
-        'Локальный диск C:\\ — 0 байт свободно.',
-        'Сетевой диск Z:\\ — нет доступа.',
-        '',
-        'Устройства: монитор, клавиатура, мышь, принтер.',
-      ])
+    if (key === 'mail') return this.getMail()
+    if (key === 'computer') return new Explorer(this.sound)
+    if (key === 'camera') {
+      const cam = new Camera(this.sound)
+      cam.setAccess(this.cameraAccess)
+      return cam
     }
     return new Note('Корзина', ['Корзина пуста.', '', 'Здесь ничего нет. Пока.'])
+  }
+
+  private getMail(): Mail {
+    const cached = this.cache.get('mail')
+    if (cached instanceof Mail) return cached
+    const mail = new Mail(this.sound)
+    mail.onDownload = () => this.beginInstall()
+    mail.onThreatRead = () => this.grantCamera()
+    this.cache.set('mail', mail)
+    return mail
   }
 
   private open(key: string): void {
@@ -185,6 +273,12 @@ export class Desktop {
       this.hasNewMail = false
       this.dirty = true
     }
+    // Первый запуск файла из архива: на экране появляется камера и приходит письмо.
+    if (key === 'camera' && !this.threatSent) {
+      this.threatSent = true
+      this.deliverThreat()
+    }
+
     const existing = this.windows.find((w) => w.key === key)
     if (existing) {
       existing.min = false
@@ -320,22 +414,31 @@ export class Desktop {
     ]
   }
 
-  // ── иконки ───────────────────────────────────────────────────────
+  // ── ярлыки ───────────────────────────────────────────────────────
 
-  private iconRect(i: number): Rect {
-    return { x: 10, y: 8 + i * 94, w: 88, h: 92 }
+  private iconRect(icon: DeskIcon): Rect {
+    return { x: icon.x, y: icon.y, w: ICON_W, h: ICON_H }
+  }
+
+  private clearSelection(): void {
+    if (this.selected.size === 0) return
+    this.selected.clear()
+    this.dirty = true
   }
 
   private drawIcons(): void {
     const ctx = this.ctx
-    ICONS.forEach((icon, i) => {
-      const r = this.iconRect(i)
-      if (i === this.selectedIcon) {
-        ctx.fillStyle = 'rgba(20, 40, 60, 0.45)'
+    for (const icon of this.icons) {
+      const r = this.iconRect(icon)
+      if (this.selected.has(icon.id)) {
+        ctx.fillStyle = 'rgba(24, 52, 92, 0.55)'
         ctx.fillRect(r.x, r.y, r.w, r.h)
+        ctx.strokeStyle = 'rgba(160, 190, 230, 0.45)'
+        ctx.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1)
       }
-      drawIcon(ctx, icon.key, r.x + r.w / 2, r.y + 32)
-      if (icon.key === 'mail' && this.hasNewMail) {
+      drawIcon(ctx, icon.glyph, r.x + r.w / 2, r.y + 32)
+
+      if (icon.app === 'mail' && this.hasNewMail) {
         const badge: Rect = { x: r.x + r.w / 2 + 16, y: r.y + 4, w: 16, h: 15 }
         fill(ctx, badge, C.alert)
         ctx.strokeStyle = '#1a1a14'
@@ -348,7 +451,6 @@ export class Desktop {
         })
       }
 
-      setFont(ctx, 11)
       const lines = icon.label.split(' ')
       let y = r.y + 70
       for (const line of lines) {
@@ -356,6 +458,107 @@ export class Desktop {
         text(ctx, line, r.x + r.w / 2, y, { size: 11, color: C.deskText, align: 'center' })
         y += 13
       }
+    }
+  }
+
+  /** Рамка выделения, как в проводнике Windows. */
+  private drawBand(): void {
+    if (!this.band) return
+    const ctx = this.ctx
+    const x = Math.min(this.band.x0, this.band.x1)
+    const y = Math.min(this.band.y0, this.band.y1)
+    const w = Math.abs(this.band.x1 - this.band.x0)
+    const h = Math.abs(this.band.y1 - this.band.y0)
+    if (w < 1 && h < 1) return
+
+    ctx.fillStyle = 'rgba(90, 140, 200, 0.22)'
+    ctx.fillRect(x, y, w, h)
+    ctx.strokeStyle = 'rgba(205, 225, 250, 0.85)'
+    ctx.lineWidth = 1
+    ctx.setLineDash([3, 2])
+    ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1)
+    ctx.setLineDash([])
+  }
+
+  /** Обновить выделение под рамкой. */
+  private updateBand(): void {
+    if (!this.band) return
+    const b = this.band
+    const r: Rect = {
+      x: Math.min(b.x0, b.x1),
+      y: Math.min(b.y0, b.y1),
+      w: Math.abs(b.x1 - b.x0),
+      h: Math.abs(b.y1 - b.y0),
+    }
+    const next = new Set(b.base)
+    for (const icon of this.icons) {
+      if (intersects(this.iconRect(icon), r)) next.add(icon.id)
+    }
+    this.selected = next
+    this.dirty = true
+  }
+
+  // ── установка файла из письма ────────────────────────────────────
+
+  /** Архив скачан — «распаковываем» его с прогрессом, как настоящий вирус. */
+  private beginInstall(): void {
+    if (this.install || this.icons.some((i) => i.id === 'cam04')) return
+    const now = performance.now()
+    this.install = { start: now, end: now + 2800 }
+    this.sound.busy()
+    this.dirty = true
+  }
+
+  private dropPayload(): void {
+    if (this.icons.some((i) => i.id === 'cam04')) return
+    this.icons.push({
+      id: 'cam04',
+      label: 'cam04.exe',
+      glyph: 'camera',
+      app: 'camera',
+      x: 104,
+      y: 8,
+    })
+  }
+
+  private drawInstall(): void {
+    if (!this.install) return
+    const ctx = this.ctx
+    const now = performance.now()
+    const p = clamp((now - this.install.start) / (this.install.end - this.install.start), 0, 1)
+
+    const r: Rect = { x: (DESKTOP_W - 380) / 2, y: (DESKTOP_H - TASKBAR - 176) / 2, w: 380, h: 176 }
+    panel(ctx, r, true, 2)
+
+    const bar: Rect = { x: r.x + 3, y: r.y + 3, w: r.w - 6, h: 16 }
+    const g = ctx.createLinearGradient(bar.x, bar.y, bar.x, bar.y + bar.h)
+    g.addColorStop(0, C.titleOn2)
+    g.addColorStop(1, C.titleOn)
+    ctx.fillStyle = g
+    ctx.fillRect(bar.x, bar.y, bar.w, bar.h)
+    text(ctx, 'Установка', bar.x + 5, bar.y + 8.5, { size: 12, bold: true, color: C.titleText })
+
+    const x = r.x + 18
+    let y = r.y + 34
+    text(ctx, 'Распаковка cam04-archive.zip', x, y, { size: 12, bold: true })
+    y += 18
+    text(ctx, 'Файл будет помещён на рабочий стол.', x, y, { size: 11, color: C.textDim })
+
+    const track: Rect = { x, y: y + 16, w: r.w - 36, h: 20 }
+    panel(ctx, track, false, 2)
+    const inner: Rect = { x: track.x + 2, y: track.y + 2, w: track.w - 4, h: track.h - 4 }
+    fill(ctx, inner, '#8e8e86')
+    const done: Rect = { ...inner, w: Math.round(inner.w * p) }
+    fill(ctx, done, '#2c4f86')
+    // деления, как у индикатора Win2000
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.18)'
+    for (let sx = inner.x + 12; sx < inner.x + inner.w; sx += 12) ctx.fillRect(sx, inner.y, 1, inner.h)
+
+    text(ctx, `${Math.round(p * 100)}%`, x, track.y + track.h + 14, { size: 11, color: C.textDim })
+    text(ctx, 'Не выключайте компьютер.', r.x + r.w - 18, track.y + track.h + 14, {
+      size: 11,
+      color: C.textDim,
+      align: 'right',
     })
   }
 
@@ -436,19 +639,31 @@ export class Desktop {
     if (this.notified) return
     this.notified = true
     this.deliverMail()
-    this.toast = { end: performance.now() + 12000 }
+    this.toast = { end: performance.now() + 12000, kind: 'mail' }
     this.hasNewMail = true
     this.sound.message()
     this.dirty = true
   }
 
   private deliverMail(): void {
-    let app = this.cache.get('mail')
-    if (!app) {
-      app = new Mail(this.sound)
-      this.cache.set('mail', app)
-    }
-    if (app instanceof Mail) app.deliver()
+    this.getMail().deliver()
+    this.dirty = true
+  }
+
+  /** Письмо от похитителей приходит в момент первого запуска cam04.exe. */
+  private deliverThreat(): void {
+    this.getMail().deliverThreat()
+    this.hasNewMail = true
+    this.toast = { end: performance.now() + 12000, kind: 'mail' }
+    this.sound.message()
+    this.dirty = true
+  }
+
+  /** Игрок прочитал письмо — замок камеры разблокирован. */
+  private grantCamera(): void {
+    this.cameraAccess = true
+    const cam = this.cache.get('camera')
+    if (cam instanceof Camera) cam.setAccess(true)
     this.dirty = true
   }
 
@@ -457,6 +672,7 @@ export class Desktop {
   }
 
   private drawToast(): void {
+    if (!this.toast) return
     const ctx = this.ctx
     const r = this.toastRect()
     panel(ctx, r, true, 2)
@@ -467,7 +683,11 @@ export class Desktop {
     g.addColorStop(1, C.titleOn)
     ctx.fillStyle = g
     ctx.fillRect(bar.x, bar.y, bar.w, bar.h)
-    text(ctx, 'Почта', bar.x + 5, bar.y + 8.5, { size: 11, bold: true, color: C.titleText })
+    text(ctx, this.toast.kind === 'file' ? 'Установка' : 'Почта', bar.x + 5, bar.y + 8.5, {
+      size: 11,
+      bold: true,
+      color: C.titleText,
+    })
 
     const close: Rect = { x: r.x + r.w - 21, y: r.y + 4, w: 16, h: 14 }
     panel(ctx, close, true, 1)
@@ -479,6 +699,17 @@ export class Desktop {
     ctx.moveTo(close.x + 11.5, close.y + 4)
     ctx.lineTo(close.x + 4.5, close.y + 10)
     ctx.stroke()
+
+    if (this.toast.kind === 'file') {
+      drawIcon(ctx, 'camera', r.x + 28, r.y + 44, 1)
+      text(ctx, 'Установка завершена', r.x + 50, r.y + 32, { size: 12, bold: true })
+      text(ctx, 'На рабочем столе: cam04.exe', r.x + 50, r.y + 50, { size: 11, color: C.alert })
+      text(ctx, 'Запустите файл, чтобы открыть камеру', r.x + 50, r.y + 68, {
+        size: 10,
+        color: C.textDim,
+      })
+      return
+    }
 
     // конверт
     const ex = r.x + 14
@@ -551,19 +782,23 @@ export class Desktop {
 
   // ── ввод ─────────────────────────────────────────────────────────
 
-  pointerDown(x: number, y: number): void {
+  pointerDown(x: number, y: number, shift = false): void {
     this.pointer.x = x
     this.pointer.y = y
     this.pointer.over = true
+
+    // Модальное окно установки перекрывает рабочий стол целиком.
+    if (this.install) return
 
     if (this.toast) {
       const r = this.toastRect()
       if (inside(r, x, y)) {
         const close: Rect = { x: r.x + r.w - 21, y: r.y + 4, w: 16, h: 14 }
+        const kind = this.toast.kind
         this.toast = null
         this.dirty = true
         if (inside(close, x, y)) this.sound.click()
-        else this.open('mail')
+        else if (kind === 'mail') this.open('mail')
         return
       }
     }
@@ -588,6 +823,7 @@ export class Desktop {
     }
 
     if (y >= DESKTOP_H - TASKBAR) {
+      this.clearSelection()
       if (x < 76) {
         this.startOpen = !this.startOpen
         this.dirty = true
@@ -614,19 +850,13 @@ export class Desktop {
       return
     }
 
-    for (let i = 0; i < ICONS.length; i++) {
-      if (inside(this.iconRect(i), x, y)) {
-        this.selectedIcon = i
-        this.open(ICONS[i].key)
-        return
-      }
-    }
-
+    // Окна лежат поверх ярлыков, поэтому сначала окна — сверху вниз по z.
     const ordered = this.windows.filter((w) => !w.min).sort((a, b) => b.z - a.z)
     for (const win of ordered) {
       const buttons = this.titleButtons(win)
       for (const b of buttons) {
         if (inside(b.r, x, y)) {
+          this.clearSelection()
           this.raise(win)
           if (b.kind === 'close') this.close(win)
           else if (b.kind === 'min') {
@@ -658,6 +888,7 @@ export class Desktop {
 
       const bar: Rect = { x: win.x + 3, y: win.y + 3, w: win.w - 6, h: 16 }
       if (inside(bar, x, y)) {
+        this.clearSelection()
         this.raise(win)
         this.drag = { win, ox: x - win.x, oy: y - win.y }
         return
@@ -665,6 +896,7 @@ export class Desktop {
 
       const cr = this.contentRect(win)
       if (inside(cr, x, y)) {
+        this.clearSelection()
         this.raise(win)
         win.app.click(x, y, cr)
         this.dirty = true
@@ -672,7 +904,52 @@ export class Desktop {
       }
     }
 
-    this.selectedIcon = -1
+    // Ярлыки: клик выделяет, двойной клик открывает, перетаскивание двигает.
+    for (let i = this.icons.length - 1; i >= 0; i--) {
+      const icon = this.icons[i]
+      if (!inside(this.iconRect(icon), x, y)) continue
+
+      const now = performance.now()
+      if (this.lastClick.id === icon.id && now - this.lastClick.at < 450) {
+        this.lastClick = { id: '', at: 0 }
+        this.open(icon.app)
+        return
+      }
+      this.lastClick = { id: icon.id, at: now }
+
+      if (shift) {
+        if (this.selected.has(icon.id)) this.selected.delete(icon.id)
+        else this.selected.add(icon.id)
+      } else if (!this.selected.has(icon.id)) {
+        this.selected = new Set([icon.id])
+      }
+
+      const orig = new Map<string, { x: number; y: number }>()
+      for (const id of this.selected) {
+        const it = this.icons.find((v) => v.id === id)
+        if (it) orig.set(id, { x: it.x, y: it.y })
+      }
+      this.iconDrag = {
+        ids: [...this.selected],
+        startX: x,
+        startY: y,
+        orig,
+        moved: false,
+      }
+      this.sound.click()
+      this.dirty = true
+      return
+    }
+
+    // Пустое место: рамка выделения, как в проводнике.
+    if (!shift) this.selected.clear()
+    this.band = {
+      x0: x,
+      y0: y,
+      x1: x,
+      y1: y,
+      base: new Set(this.selected),
+    }
     this.dirty = true
   }
 
@@ -681,6 +958,32 @@ export class Desktop {
     this.pointer.x = x
     this.pointer.y = y
     this.pointer.over = true
+
+    if (this.band) {
+      this.band.x1 = x
+      this.band.y1 = y
+      this.updateBand()
+      return
+    }
+
+    if (this.iconDrag) {
+      const d = this.iconDrag
+      const dx = x - d.startX
+      const dy = y - d.startY
+      if (!d.moved && Math.abs(dx) + Math.abs(dy) > 3) d.moved = true
+      if (d.moved) {
+        for (const id of d.ids) {
+          const icon = this.icons.find((v) => v.id === id)
+          const o = d.orig.get(id)
+          if (!icon || !o) continue
+          icon.x = clamp(o.x + dx, 0, DESKTOP_W - ICON_W)
+          icon.y = clamp(o.y + dy, 0, DESKTOP_H - TASKBAR - ICON_H)
+        }
+        this.dirty = true
+      }
+      return
+    }
+
     if (!this.drag) return
     const { win, ox, oy } = this.drag
     if (win.max) return
@@ -698,14 +1001,19 @@ export class Desktop {
 
   pointerUp(): void {
     this.drag = null
+    this.iconDrag = null
+    if (this.band) {
+      this.band = null
+      this.dirty = true
+    }
   }
 
   isDragging(): boolean {
-    return this.drag !== null
+    return this.drag !== null || (this.iconDrag?.moved ?? false) || this.band !== null
   }
 
-  /** Идёт «загрузка» программы: на экране нужны песочные часы. */
+  /** Идёт «загрузка» программы или установка файла: на экране нужны песочные часы. */
   isBusy(): boolean {
-    return this.pending !== null
+    return this.pending !== null || this.install !== null
   }
 }

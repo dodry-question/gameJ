@@ -298,11 +298,101 @@ function trash(p: Pix): void {
   p.rect(5, 13, 22, 1, binLo)
 }
 
+/** Папка: жёлтая, с язычком и тенью внутри. */
+function folder(p: Pix): void {
+  const back = rgba('#d8a520')
+  const front = rgba('#f2c94c')
+  const frontHi = rgba('#ffe38a')
+  const frontLo = rgba('#c99a1e')
+
+  p.rect(3, 9, 12, 4, back)
+  p.rect(3, 11, 26, 16, back)
+  p.rect(3, 12, 26, 1, frontLo)
+
+  p.poly(
+    [
+      [3, 15],
+      [29, 15],
+      [27, 27],
+      [5, 27],
+    ],
+    front,
+  )
+  p.rect(4, 15, 24, 2, frontHi)
+  p.rect(5, 26, 22, 1, frontLo)
+}
+
+/** Файл: лист с загнутым углом и строчками текста. */
+function file(p: Pix): void {
+  const paper = rgba('#f7f5ea')
+  const paperLo = rgba('#c9c5b2')
+  p.poly(
+    [
+      [7, 3],
+      [21, 3],
+      [27, 9],
+      [27, 29],
+      [7, 29],
+    ],
+    paper,
+  )
+  p.rect(7, 3, 14, 1, rgba('#ffffff'))
+  p.rect(7, 28, 20, 1, paperLo)
+  p.poly(
+    [
+      [21, 3],
+      [21, 9],
+      [27, 9],
+    ],
+    rgba('#dedac6'),
+  )
+  p.line(21, 3, 21, 9, paperLo)
+  p.line(21, 9, 27, 9, paperLo)
+  for (const y of [14, 17, 20, 23]) p.rect(10, y, 13, 1, rgba('#8f8d80'))
+}
+
+/** Программа: окошко с камерой наблюдения. */
+function camera(p: Pix): void {
+  const body = rgba('#5c6672')
+  const bodyHi = rgba('#8b96a3')
+  const bodyLo = rgba('#39414b')
+  const glass = rgba('#1d2b36')
+
+  // кронштейн
+  p.rect(15, 22, 4, 6, bodyLo)
+  p.rect(9, 27, 16, 2, body)
+  p.rect(9, 27, 16, 1, bodyHi)
+
+  // корпус
+  p.poly(
+    [
+      [6, 8],
+      [22, 5],
+      [26, 14],
+      [10, 18],
+    ],
+    body,
+  )
+  p.line(6, 8, 22, 5, bodyHi)
+  p.line(10, 18, 26, 14, bodyLo)
+
+  // объектив
+  p.ellipse(9, 14, 4, 4, bodyLo)
+  p.ellipse(9, 14, 2, 2, glass)
+  p.rect(8, 12, 1, 1, rgba('#9fd4e8'))
+
+  // красный огонёк записи
+  p.rect(22, 8, 2, 2, rgba('#d4402e'))
+}
+
 const ICONS: Record<string, (p: Pix) => void> = {
   mail,
   browser: globe,
   computer,
   trash,
+  folder,
+  file,
+  camera,
 }
 
 const cache = new Map<string, HTMLCanvasElement>()

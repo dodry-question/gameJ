@@ -6,4 +6,6 @@ export interface App {
   draw(ctx: CanvasRenderingContext2D, r: Rect): void
   /** x, y — абсолютные координаты в системе рабочего стола. */
   click(x: number, y: number, r: Rect): void
+  /** Кадр анимации. true — содержимое изменилось и окно надо перерисовать. */
+  tick?(): boolean
 }

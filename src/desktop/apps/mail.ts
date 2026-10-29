@@ -18,6 +18,8 @@ type Letter = {
   body: string
   read: boolean
   attachment?: Attachment
+  /** Письмо похитителей: после прочтения открывается замок камеры. */
+  threat?: boolean
 }
 
 type Hit = { r: Rect; fn: () => void }
@@ -74,6 +76,11 @@ const FOLDERS: Array<[Folder, string]> = [
 
 export class Mail implements App {
   title = 'Почта'
+  /** Архив скачали — рабочий стол запускает «установку». */
+  onDownload?: () => void
+  /** Прочитано письмо похитителей — доступ к замку камеры открыт. */
+  onThreatRead?: () => void
+
   private folder: Folder = 'in'
   private selected = 0
   private hits: Hit[] = []
@@ -96,6 +103,25 @@ export class Mail implements App {
         'Выгрузка во вложении. Скачайте файл и откройте его на рабочем столе.',
       read: false,
       attachment: { name: 'cam04-archive.zip', size: '2,4 МБ · ZIP-архив', downloaded: false },
+    })
+    this.folder = 'in'
+    this.selected = 0
+  }
+
+  /** Письмо от похитителей: приходит после первого запуска cam04.exe. */
+  deliverThreat(): void {
+    this.letters.unshift({
+      from: 'Неизвестный отправитель',
+      subject: 'Не узнаёшь её?',
+      date: '03:14',
+      body:
+        'Не узнаёшь её?\n\n' +
+        'Теперь, надеюсь, ты понял. Мы не прячем её от тебя — мы даём тебе шанс.\n\n' +
+        'Камера 04 слушается тебя: скажи ей, что делать, и открой дверь. ' +
+        'Только не тяни — мы можем и передумать.\n\n' +
+        'Действуй.',
+      read: false,
+      threat: true,
     })
     this.folder = 'in'
     this.selected = 0
@@ -189,6 +215,7 @@ export class Mail implements App {
           l.read = true
           if (wasUnread) this.sound.message()
           else this.sound.click()
+          if (wasUnread && l.threat) this.onThreatRead?.()
         },
       })
       y += 19
@@ -252,7 +279,7 @@ export class Mail implements App {
     ctx.stroke()
 
     text(ctx, a.name, box.x + 42, box.y + 30, { size: 12, bold: true, color: C.ink })
-    text(ctx, a.downloaded ? 'сохранено в «Мои документы»' : a.size, box.x + 42, box.y + 43, {
+    text(ctx, a.downloaded ? 'загружено · установка на рабочий стол' : a.size, box.x + 42, box.y + 43, {
       size: 10,
       color: C.textDim,
     })
@@ -269,6 +296,7 @@ export class Mail implements App {
         }
         a.downloaded = true
         this.sound.open()
+        this.onDownload?.()
       },
     })
   }
