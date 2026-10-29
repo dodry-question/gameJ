@@ -6,6 +6,7 @@ import { Browser } from './apps/browser'
 import { Camera } from './apps/camera'
 import { Explorer } from './apps/explorer'
 import { Mail } from './apps/mail'
+import { MapApp } from './apps/map'
 import { Note } from './apps/note'
 import type { Sound } from '../audio'
 
@@ -26,6 +27,7 @@ const LAUNCH_MS: Record<string, number> = {
   camera: 1300,
   computer: 550,
   trash: 450,
+  map: 750,
 }
 
 type Win = {
@@ -59,10 +61,12 @@ const SIZES: Record<string, Rect> = {
   computer: { x: 280, y: 110, w: 580, h: 400 },
   trash: { x: 300, y: 190, w: 350, h: 180 },
   camera: { x: 236, y: 86, w: 560, h: 470 },
+  map: { x: 668, y: 120, w: 280, h: 430 },
 }
 
 const START_ICONS: Array<Omit<DeskIcon, 'x' | 'y'>> = [
   { id: 'mail', label: 'Почта', glyph: 'mail', app: 'mail' },
+  { id: 'map', label: 'Карта', glyph: 'map', app: 'map' },
   { id: 'browser', label: 'Интернет', glyph: 'browser', app: 'browser' },
   { id: 'computer', label: 'Мой компьютер', glyph: 'computer', app: 'computer' },
   { id: 'trash', label: 'Корзина', glyph: 'trash', app: 'trash' },
@@ -70,6 +74,7 @@ const START_ICONS: Array<Omit<DeskIcon, 'x' | 'y'>> = [
 
 const START_MENU: MenuItem[] = [
   { label: 'Почта', key: 'mail' },
+  { label: 'Карта блока C', key: 'map' },
   { label: 'Netscape Navigator', key: 'browser' },
   { label: 'Мой компьютер', key: 'computer' },
   null,
@@ -249,6 +254,7 @@ export class Desktop {
   private makeApp(key: string): App {
     if (key === 'browser') return new Browser(this.sound)
     if (key === 'mail') return this.getMail()
+    if (key === 'map') return new MapApp(this.sound)
     if (key === 'computer') return new Explorer(this.sound)
     if (key === 'camera') {
       const cam = new Camera(this.sound)
@@ -321,6 +327,7 @@ export class Desktop {
 
   private close(win: Win): void {
     this.windows = this.windows.filter((w) => w !== win)
+    if (win.key === 'camera') this.sound.setBreathing(null)
     this.dirty = true
     this.sound.close()
   }
@@ -398,6 +405,17 @@ export class Desktop {
     ctx.clip()
     win.app.draw(ctx, cr)
     ctx.restore()
+
+    // грип ресайза в правом нижнем углу
+    if (!win.max) {
+      ctx.strokeStyle = 'rgba(0, 0, 0, 0.4)'
+      for (let i = 1; i <= 3; i++) {
+        ctx.beginPath()
+        ctx.moveTo(win.x + win.w - i * 5, win.y + win.h - 3)
+        ctx.lineTo(win.x + win.w - 3, win.y + win.h - i * 5)
+        ctx.stroke()
+      }
+    }
   }
 
   private titleButtons(win: Win): Array<{ r: Rect; kind: 'close' | 'min' | 'max' }> {
@@ -782,6 +800,16 @@ export class Desktop {
 
   // ── ввод ─────────────────────────────────────────────────────────
 
+  /** Потянуть за край окна: правый, нижний или угол. */
+  private resizing: {
+    win: Win
+    edge: 'e' | 's' | 'se'
+    x: number
+    y: number
+    w: number
+    h: number
+  } | null = null
+
   pointerDown(x: number, y: number, shift = false): void {
     this.pointer.x = x
     this.pointer.y = y
@@ -886,6 +914,16 @@ export class Desktop {
         }
       }
 
+      if (!win.max) {
+        const edge = this.resizeEdge(win, x, y)
+        if (edge) {
+          this.clearSelection()
+          this.raise(win)
+          this.resizing = { win, edge, x, y, w: win.w, h: win.h }
+          return
+        }
+      }
+
       const bar: Rect = { x: win.x + 3, y: win.y + 3, w: win.w - 6, h: 16 }
       if (inside(bar, x, y)) {
         this.clearSelection()
@@ -966,6 +1004,14 @@ export class Desktop {
       return
     }
 
+    if (this.resizing) {
+      const r = this.resizing
+      if (r.edge !== 's') r.win.w = clamp(r.w + x - r.x, 320, DESKTOP_W - r.win.x)
+      if (r.edge !== 'e') r.win.h = clamp(r.h + y - r.y, 220, DESKTOP_H - TASKBAR - r.win.y)
+      this.dirty = true
+      return
+    }
+
     if (this.iconDrag) {
       const d = this.iconDrag
       const dx = x - d.startX
@@ -1003,6 +1049,7 @@ export class Desktop {
     if (this.iconDrag?.moved) this.snapIcons(this.iconDrag.ids)
     this.drag = null
     this.iconDrag = null
+    this.resizing = null
     if (this.band) {
       this.band = null
       this.dirty = true
@@ -1072,7 +1119,22 @@ export class Desktop {
   }
 
   isDragging(): boolean {
-    return this.drag !== null || (this.iconDrag?.moved ?? false) || this.band !== null
+    return (
+      this.drag !== null ||
+      (this.iconDrag?.moved ?? false) ||
+      this.band !== null ||
+      this.resizing !== null
+    )
+  }
+
+  /** Какой край окна под курсором: правый, нижний, угол — или null. */
+  private resizeEdge(win: Win, x: number, y: number): 'e' | 's' | 'se' | null {
+    const nearE = x >= win.x + win.w - 6 && x <= win.x + win.w + 2 && y >= win.y + 20 && y <= win.y + win.h + 2
+    const nearS = y >= win.y + win.h - 6 && y <= win.y + win.h + 2 && x >= win.x + 20 && x <= win.x + win.w + 2
+    if (nearE && nearS) return 'se'
+    if (nearE) return 'e'
+    if (nearS) return 's'
+    return null
   }
 
   /** Идёт «загрузка» программы или установка файла: на экране нужны песочные часы. */

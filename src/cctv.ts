@@ -21,14 +21,14 @@ const H = 240
  */
 type Pose = Record<string, [number, number, number]>
 
-/** Сидя, руки связаны перед собой, на коленях. */
+/** Сидя: спина прямая, руки связаны перед собой и лежат на коленях. */
 const SIT: Pose = {
-  Spine: [0.12, 0, 0],
+  Spine: [0.04, 0, 0],
   Head: [0, 0, 0],
-  LeftArm: [0.5, 0, 1.1],
-  RightArm: [0.5, 0, -1.1],
-  LeftForeArm: [0, 1.1, 0],
-  RightForeArm: [0, -1.1, 0],
+  LeftArm: [0.95, 0, 0.55],
+  RightArm: [0.95, 0, -0.55],
+  LeftForeArm: [0, 0.85, 0],
+  RightForeArm: [0, -0.85, 0],
   LeftUpLeg: [0, 0, 1.5],
   RightUpLeg: [0, 0, 1.5],
   LeftLeg: [0, 0, -1.5],
@@ -55,6 +55,8 @@ const STAND: Pose = {
 
 /** Стул стоит здесь, девушка начинает привязанной к нему. */
 const CHAIR = { x: -0.6, z: -0.9 }
+/** Разворот стула и сидящей девушки: лицом чуть к камере. */
+const CHAIR_YAW = 0.78
 const SIT_Y = -0.487
 
 export class Cctv {
@@ -78,19 +80,37 @@ export class Cctv {
   private phase = 0
   private prev = new THREE.Vector3(CHAIR.x, 0, CHAIR.z)
   /** Текущий и целевой поворот корпуса (рад). */
-  private yaw = Math.PI / 2
-  private yawTarget = Math.PI / 2
+  private yaw = CHAIR_YAW
+  private yawTarget = CHAIR_YAW
   /** 0 — сидит, 1 — стоит: плавный подъём со стула. */
   private freeT = 0
+  /** Момент освобождения со стула — от него считаем цикл бродит/стучит. */
+  private freedAt = 0
   /** 0 — стоит на месте, 1 — идёт: плавная смесь поз. */
   private moveBlend = 0
   /** Ракурсы камер: [0] общий, [1] у двери, [2] низкий из угла. */
-  private view = 0
-  private static VIEWS: Array<{ pos: [number, number, number]; at: [number, number, number]; fov: number }> = [
+  static VIEWS: Array<{ pos: [number, number, number]; at: [number, number, number]; fov: number }> = [
     { pos: [1.7, 2.2, 1.4], at: [-0.55, 0.85, -1.3], fov: 58 },
     { pos: [1.2, 2.0, 0.5], at: [-0.5, 0.85, -1.6], fov: 58 },
     { pos: [-2.4, 1.3, 1.3], at: [-0.15, 0.95, -1.6], fov: 55 },
   ]
+
+  /** Видит ли текущая камера точку (x, z) — для радара на карте. */
+  sees(x: number, z: number): boolean {
+    const v = Cctv.VIEWS[this.view]
+    const dx = v.at[0] - v.pos[0]
+    const dz = v.at[2] - v.pos[2]
+    const px = x - v.pos[0]
+    const pz = z - v.pos[2]
+    if (Math.hypot(px, pz) > 7) return false
+    const dl = Math.hypot(dx, dz) || 1
+    const pl = Math.hypot(px, pz) || 1
+    const half = (v.fov / 2) * 0.95 * (Math.PI / 180)
+    return (dx * px + dz * pz) / (dl * pl) > Math.cos(half)
+  }
+
+  /** Текущий ракурс (индекс в VIEWS). */
+  private view = 0
 
   constructor() {
     this.canvas = document.createElement('canvas')
@@ -170,13 +190,17 @@ export class Cctv {
     tube.position.set(0.2, 2.78, -0.4)
     this.scene.add(tube)
 
-    // стул, к которому привязана девушка: сиденье, спинка, четыре ножки
+    // стул, к которому привязана девушка: развёрнут так, чтобы она сидела
+    // ровно, спиной к спинке, лицом туда же, куда смотрит (CHAIR_YAW)
+    const chair = new THREE.Group()
+    chair.position.set(CHAIR.x, 0, CHAIR.z)
+    chair.rotation.y = CHAIR_YAW
     const seat = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.05, 0.42), woodMat)
-    seat.position.set(CHAIR.x, 0.45, CHAIR.z)
-    this.scene.add(seat)
+    seat.position.set(0, 0.45, 0)
+    chair.add(seat)
     const backrest = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.55, 0.04), woodMat)
-    backrest.position.set(CHAIR.x, 0.75, CHAIR.z - 0.19)
-    this.scene.add(backrest)
+    backrest.position.set(0, 0.75, -0.19)
+    chair.add(backrest)
     for (const [dx, dz] of [
       [-0.18, -0.18],
       [0.18, -0.18],
@@ -184,14 +208,20 @@ export class Cctv {
       [0.18, 0.18],
     ]) {
       const leg = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.45, 0.045), woodMat)
-      leg.position.set(CHAIR.x + dx, 0.22, CHAIR.z + dz)
-      this.scene.add(leg)
+      leg.position.set(dx, 0.22, dz)
+      chair.add(leg)
     }
-    // верёвка на запястьях — руки связаны перед собой, на коленях
-    const rope = new THREE.Mesh(new THREE.TorusGeometry(0.09, 0.014, 6, 12), new THREE.MeshLambertMaterial({ color: 0x8a7448 }))
-    rope.position.set(CHAIR.x, 0.56, CHAIR.z + 0.16)
+    // верёвка на запястьях — руки связаны перед собой, на коленях, плюс
+    // отрезок к ножке стула: видно, что она прицеплена
+    const rope = new THREE.Mesh(new THREE.TorusGeometry(0.085, 0.016, 6, 12), new THREE.MeshLambertMaterial({ color: 0x8a7448 }))
+    rope.position.set(0, 0.62, 0.22)
     rope.rotation.x = Math.PI / 2
-    this.scene.add(rope)
+    chair.add(rope)
+    const rope2 = new THREE.Mesh(new THREE.TorusGeometry(0.07, 0.013, 6, 12), new THREE.MeshLambertMaterial({ color: 0x8a7448 }))
+    rope2.position.set(-0.14, 0.3, 0.2)
+    rope2.rotation.set(Math.PI / 2.4, 0, 0.5)
+    chair.add(rope2)
+    this.scene.add(chair)
 
     // табурет и ведро
     const stool = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.06, 0.4), darkMat)
@@ -257,6 +287,11 @@ export class Cctv {
     return this.girl !== null
   }
 
+  /** Девушка уже скрылась из кадра. */
+  get gone(): boolean {
+    return this.state === 'gone'
+  }
+
   /** Поставить камеру наблюдения в ракурс. */
   setView(index: number): void {
     this.view = ((index % Cctv.VIEWS.length) + Cctv.VIEWS.length) % Cctv.VIEWS.length
@@ -265,6 +300,11 @@ export class Cctv {
 
   getView(): number {
     return this.view
+  }
+
+  /** Ракурсы для карты: позиции, направления и углы обзора. */
+  get views(): typeof Cctv.VIEWS {
+    return Cctv.VIEWS
   }
 
   private applyView(index: number): void {
@@ -333,16 +373,37 @@ export class Cctv {
     this.renderer.render(this.scene, this.camera)
   }
 
-  /** Сценарий: привязана → освободилась → бродит и стучит. */
+  /** Сценарий: привязана, пока игрок не отвяжет; после — бродит и стучит. */
   private narrative(): void {
-    if (this.state === 'tied' && this.time > 8) {
-      this.setState('pace')
-    } else if (this.state === 'pace' || this.state === 'idle' || this.state === 'knock') {
-      const cycle = (this.time - 8) % 12
+    if (this.state === 'pace' || this.state === 'idle' || this.state === 'knock') {
+      const cycle = (this.time - this.freedAt) % 12
       if (cycle < 7) this.setState('pace')
       else if (cycle < 11) this.setState('knock')
       else this.setState('idle')
     }
+  }
+
+  /** Игрок дал команду отвязать: она встаёт и начинает пытаться уйти. */
+  untie(): void {
+    if (this.state === 'tied') {
+      this.freedAt = this.time
+      this.setState('pace')
+    }
+  }
+
+  /** Насколько она напугана: 0.3 привязана, 0.55 бродит, 0.85 стучит, 1 бежит. */
+  get stress(): number {
+    if (this.state === 'tied') return 0.35 + Math.sin(this.time * 0.7) * 0.08
+    if (this.state === 'pace' || this.state === 'idle') return 0.55
+    if (this.state === 'knock') return 0.85
+    if (this.state === 'run') return 1
+    return 0
+  }
+
+  /** Мировая позиция девушки — для радара на карте. */
+  get girlPos(): { x: number; z: number } | null {
+    if (!this.girl || !this.girl.visible) return null
+    return { x: this.girl.position.x, z: this.girl.position.z }
   }
 
   private move(dt: number): void {
@@ -386,18 +447,20 @@ export class Cctv {
     g.position.y = SIT_Y * sit
 
     if (this.state === 'tied') {
-      // вырывается: извивается, дёргает ногами, озирается
+      // привязана: дышит всё быстрее со стрессом, ёрзает, озирается
       const w = t * 6.5
+      const stress = this.stress
+      const breath = Math.sin(t * (1.6 + stress * 1.6))
       this.applyPose(SIT)
-      this.pose('Spine', 0.12 + Math.sin(w) * 0.07, Math.sin(t * 2.1) * 0.16, Math.cos(w * 0.7) * 0.05)
-      this.pose('Head', Math.sin(t * 1.3) * 0.12, Math.sin(t * 0.7) * 0.55, Math.sin(w * 0.5) * 0.08)
-      this.pose('LeftUpLeg', 0, 0, 1.5 + Math.max(0, Math.sin(w)) * 0.25)
-      this.pose('RightUpLeg', 0, 0, 1.5 + Math.max(0, Math.sin(w + 2.1)) * 0.25)
-      this.pose('LeftArm', 0.5 + Math.sin(w * 1.3) * 0.12, 0, 1.1)
-      this.pose('RightArm', 0.5 - Math.sin(w * 1.1) * 0.12, 0, -1.1)
+      this.pose('Spine', 0.04 + breath * (0.015 + stress * 0.03), Math.sin(t * 1.7) * 0.1, Math.cos(w * 0.5) * 0.05)
+      this.pose('Head', breath * 0.04, Math.sin(t * 0.7) * 0.55, Math.sin(w * 0.5) * 0.08)
+      this.pose('LeftUpLeg', 0, 0, 1.5 + Math.max(0, Math.sin(w)) * 0.2)
+      this.pose('RightUpLeg', 0, 0, 1.5 + Math.max(0, Math.sin(w + 2.1)) * 0.2)
+      this.pose('LeftArm', 0.95 + Math.sin(w * 1.3) * 0.1, 0, 0.55)
+      this.pose('RightArm', 0.95 - Math.sin(w * 1.1) * 0.1, 0, -0.55)
       this.targetX = CHAIR.x
       this.targetZ = CHAIR.z
-      this.yaw = this.yawTarget = 0.8 // лицом к камере
+      this.yaw = this.yawTarget = CHAIR_YAW // ровно по спинке стула
       g.rotation.y = this.yaw
       return
     }
@@ -458,7 +521,7 @@ export class Cctv {
       base.LeftArm = [1.3, 0, Math.sin(t * 1.4) * 0.05]
       base.RightArm = [1.3, 0, -Math.sin(t * 1.4) * 0.05]
       this.targetX = CHAIR.x + Math.sin(t * 0.25) * 0.25
-      this.targetZ = CHAIR.z
+      this.targetZ = -1.4
       // лицом к камере
       this.yawTarget = Math.atan2(1.7 - g.position.x, 1.4 - g.position.z)
     }
@@ -475,4 +538,12 @@ export class Cctv {
     if (this.doorOpen === 0) this.doorOpen = 0.0001
     this.setState('run')
   }
+}
+
+// Один экземпляр на всю игру: камера и карта смотрят на одну и ту же сцену.
+let shared: Cctv | null = null
+
+export function getCctv(): Cctv {
+  if (!shared) shared = new Cctv()
+  return shared
 }

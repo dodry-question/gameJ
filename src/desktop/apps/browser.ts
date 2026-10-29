@@ -11,7 +11,7 @@ import type { Rect } from '../draw'
 import type { App } from '../app'
 import type { Sound } from '../../audio'
 
-type Page = 'home' | 'search' | 'error'
+type Page = 'home' | 'search' | 'cams' | 'error'
 
 type Hit = { r: Rect; fn: () => void }
 
@@ -20,6 +20,7 @@ const SERIF = '"Times New Roman", Times, Georgia, serif'
 const URLS: Record<Page, string> = {
   home: 'http://intranet.local/',
   search: 'http://intranet.local/cgi-bin/search?q=kamery',
+  cams: 'http://intranet.local/security/cams/',
   error: 'http://192.168.0.13/gate/',
 }
 
@@ -86,6 +87,7 @@ export class Browser implements App {
     ctx.rect(page.x, page.y, page.w, page.h)
     ctx.clip()
     if (this.page === 'home') this.drawHome(ctx, page)
+    if (this.page === 'cams') this.drawCams(ctx, page)
     else if (this.page === 'search') this.drawSearch(ctx, page)
     else this.drawError(ctx, page)
     ctx.restore()
@@ -454,6 +456,8 @@ export class Browser implements App {
 
     this.link(ctx, '› Поиск по узлу', x, y, () => this.go('search'))
     y += 19
+    this.link(ctx, '› Сеть наблюдения блока C', x, y, () => this.go('cams'))
+    y += 19
     this.link(ctx, '› Список файлов блока C', x, y, () => this.go('error'))
     y += 19
     this.link(ctx, '› Почтовый шлюз (только изнутри)', x, y, () => this.sound.error())
@@ -549,6 +553,64 @@ export class Browser implements App {
     this.serif(ctx, 11)
     ctx.fillStyle = '#5c5c54'
     ctx.fillText('Страница 1 из 1 · Следующая ›', x, y)
+  }
+
+  /** Служебная страница: список камер блока и правила работы с ними. */
+  private drawCams(ctx: CanvasRenderingContext2D, p: Rect): void {
+    const x = p.x + 20
+    let y = p.y + 26
+
+    this.serif(ctx, 16, true)
+    ctx.fillStyle = '#23231c'
+    ctx.fillText('Сеть наблюдения · блок C', x, y)
+    y += 20
+    this.serif(ctx, 11)
+    ctx.fillStyle = '#5c5c54'
+    ctx.fillText('узел INTRANET-LOCAL · служба безопасности · доступ: оператор', x, y)
+    y += 16
+    this.rule(ctx, x, y, p.w - 40)
+    y += 20
+
+    this.serif(ctx, 12)
+    const cams: Array<[string, string, string]> = [
+      ['КАМ-1', 'комната 4 · общий вид', 'ОНЛАЙН'],
+      ['КАМ-2', 'комната 4 · дверь', 'ОНЛАЙН'],
+      ['КАМ-3', 'комната 4 · нижний угол', 'ОНЛАЙН'],
+      ['КАМ-4', 'архивная запись 03:06', 'ЗАПИСЬ'],
+    ]
+    for (const [name, place, status] of cams) {
+      this.serif(ctx, 12, true)
+      ctx.fillStyle = '#23231c'
+      ctx.fillText(name, x, y)
+      this.serif(ctx, 12)
+      ctx.fillStyle = '#5c5c54'
+      ctx.fillText(place, x + 64, y)
+      ctx.fillStyle = status === 'ОНЛАЙН' ? '#2c7a2c' : '#8a5a12'
+      ctx.fillText('· ' + status, x + 260, y)
+      y += 18
+    }
+
+    y += 10
+    this.rule(ctx, x, y, p.w - 40)
+    y += 20
+
+    this.serif(ctx, 12)
+    ctx.fillStyle = '#23231c'
+    for (const line of [
+      'Картомониторинг: приложение «Карта» на столе оператора.',
+      'Переключение каналов — только с карты.',
+      'Управление замками: одна команда за раз, с подтверждением по почте.',
+      'Напоминаем: наблюдение не означает вмешательство.',
+    ]) {
+      for (const part of wrap(ctx, line, p.w - 60, 12)) {
+        ctx.fillText(part, x, y)
+        y += 16
+      }
+      y += 3
+    }
+
+    y += 8
+    this.link(ctx, '← На главную', x, y, () => this.go('home'))
   }
 
   private drawError(ctx: CanvasRenderingContext2D, p: Rect): void {

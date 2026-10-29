@@ -9,9 +9,10 @@ import { fill, inside, panel, setFont, text } from '../draw'
 import type { Rect } from '../draw'
 import type { App } from '../app'
 import type { Sound } from '../../audio'
-import { Cctv } from '../../cctv'
+import { getCctv } from '../../cctv'
+import type { Cctv } from '../../cctv'
 
-type Phase = 'locked' | 'ready' | 'open'
+type Phase = 'locked' | 'ready' | 'untied' | 'open'
 
 type Hit = { r: Rect; fn: () => void }
 
@@ -68,6 +69,11 @@ export class Camera implements App {
       this.released += 0.016
       if (this.released > 4.5) this.cctv.setState('gone')
     }
+
+    // дыхание девушки: слышно, пока камера открыта, и чем больше стресс, тем чаще
+    const audible = this.phase !== 'open' && this.cctv.loaded && !this.cctv.gone
+    this.sound.setBreathing(audible ? this.cctv.stress : null)
+
     // сценарий девушки (привязана → бродит → стучит) ведёт сам Cctv
     return true
   }
@@ -76,7 +82,7 @@ export class Camera implements App {
     this.hits = []
     fill(ctx, r, '#1b1d1f')
 
-    if (!this.cctv) this.cctv = new Cctv()
+    if (!this.cctv) this.cctv = getCctv()
 
     // ── рамка записи ────────────────────────────────────────────────
     const head: Rect = { x: r.x + 8, y: r.y + 6, w: r.w - 16, h: 18 }
@@ -128,34 +134,34 @@ export class Camera implements App {
     ctx.fillStyle = '#c9ccc6'
     ctx.fillText('ЗАПИСЬ', head.x + head.w - 38, head.y + head.h / 2)
 
-    // ── нижняя полоса: ракурсы слева, кнопка двери справа ───────────
-    const stripY = feed.y + feed.h + 6
-    for (let i = 0; i < 3; i++) {
-      const b: Rect = { x: r.x + 8 + i * 62, y: stripY, w: 58, h: 26 }
-      panel(ctx, b, this.cctv.getView() === i, 1)
-      setFont(ctx, 10, this.cctv.getView() === i)
-      ctx.fillStyle = this.cctv.getView() === i ? '#d8e4d0' : '#8f948d'
-      ctx.textAlign = 'center'
-      ctx.fillText(`КАМ ${i + 1}`, b.x + b.w / 2, b.y + b.h / 2 + 1)
-      ctx.textAlign = 'left'
-      const idx = i
-      this.hits.push({ r: b, fn: () => this.cctv?.setView(idx) })
-    }
-
+    // ── нижняя полоса: одна команда за раз — сначала отвязать, потом дверь ──
     const btn: Rect = { x: r.x + r.w - 214, y: r.y + r.h - 40, w: 202, h: 30 }
-    const enabled = this.phase === 'ready'
+    const enabled = this.phase === 'ready' || this.phase === 'untied'
     panel(ctx, btn, enabled, 2)
     setFont(ctx, 13, true)
     ctx.fillStyle = enabled ? '#1d3a1d' : '#6d6d66'
     ctx.textAlign = 'center'
-    ctx.fillText(
-      this.phase === 'open' ? 'ДВЕРЬ ОТКРЫТА' : enabled ? 'ОТКРЫТЬ ДВЕРЬ' : 'ЗАБЛОКИРОВАНО',
-      btn.x + btn.w / 2,
-      btn.y + btn.h / 2,
-    )
+    const label =
+      this.phase === 'locked'
+        ? 'ЗАБЛОКИРОВАНО'
+        : this.phase === 'ready'
+          ? 'ОТВЯЗАТЬ'
+          : this.phase === 'untied'
+            ? 'ОТКРЫТЬ ДВЕРЬ'
+            : 'ДВЕРЬ ОТКРЫТА'
+    ctx.fillText(label, btn.x + btn.w / 2, btn.y + btn.h / 2)
     ctx.textAlign = 'left'
 
-    if (enabled) {
+    if (this.phase === 'ready') {
+      this.hits.push({
+        r: btn,
+        fn: () => {
+          this.phase = 'untied'
+          this.cctv?.untie()
+          this.sound.open()
+        },
+      })
+    } else if (this.phase === 'untied') {
       this.hits.push({
         r: btn,
         fn: () => {

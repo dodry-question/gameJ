@@ -393,6 +393,27 @@ const ICONS: Record<string, (p: Pix) => void> = {
   folder,
   file,
   camera,
+  map,
+}
+
+/** Карта: сложенный лист с планом блока и красной меткой. */
+function map(p: Pix): void {
+  const paper = rgba('#e8e2c8')
+  const fold = rgba('#cfc8ac')
+  const ink = rgba('#5c6e5c')
+  p.rect(4, 6, 24, 20, paper)
+  p.rect(11, 6, 1, 20, fold)
+  p.rect(20, 6, 1, 20, fold)
+  p.rect(4, 25, 24, 1, rgba('#b8b098'))
+  // план: комнаты и коридор
+  p.rect(6, 9, 8, 1, ink)
+  p.rect(6, 9, 1, 6, ink)
+  p.rect(6, 14, 20, 1, ink)
+  p.rect(24, 9, 1, 6, ink)
+  p.rect(17, 16, 9, 1, ink)
+  p.rect(17, 16, 1, 7, ink)
+  // красная метка объекта
+  p.ellipse(13, 19, 2, 2, rgba('#d4402e'))
 }
 
 const cache = new Map<string, HTMLCanvasElement>()

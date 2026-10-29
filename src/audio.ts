@@ -14,6 +14,9 @@ export class Sound {
   private modemLoading = false
   private ambient: AudioBuffer | null = null
   private ambientLoading = false
+  private creak: AudioBuffer | null = null
+  private breathStress: number | null = null
+  private breathTimer = 0
   private started = false
 
   /** Вызывать на первом клике: браузеры не дают создать звук раньше. */
@@ -42,6 +45,8 @@ export class Sound {
       this.loadAmbient()
       this.loadModem()
       this.scheduleModem(28 + Math.random() * 26)
+      this.loadCreak()
+      this.scheduleCreak(16 + Math.random() * 18)
       void ctx.resume()
     } catch {
       this.ctx = null
@@ -251,10 +256,127 @@ export class Sound {
     const env = ctx.createGain()
     const t = ctx.currentTime
     env.gain.setValueAtTime(0.0001, t)
-    env.gain.linearRampToValueAtTime(0.1, t + 1.2)
-    env.gain.setValueAtTime(0.1, t + Math.max(1.3, this.modem.duration - 1.6))
+    env.gain.linearRampToValueAtTime(0.05, t + 1.2)
+    env.gain.setValueAtTime(0.05, t + Math.max(1.3, this.modem.duration - 1.6))
     env.gain.linearRampToValueAtTime(0.0001, t + this.modem.duration)
     src.connect(lp).connect(env).connect(out)
+    src.start(t)
+  }
+  // ── дыхание девушки ──────────────────────────────────────────────
+
+  /**
+   * Дыхание из динамиков монитора: слышно, пока открыта камера. Чем больше
+   * стресс, тем чаще и громче. null — девушка вне кадра, тишина.
+   */
+  setBreathing(stress: number | null): void {
+    if (stress === null) {
+      this.breathStress = null
+      return
+    }
+    if (this.breathStress === null) {
+      this.breathStress = stress
+      this.scheduleBreath(0.3)
+      return
+    }
+    this.breathStress = stress
+  }
+
+  private scheduleBreath(delaySec: number): void {
+    window.clearTimeout(this.breathTimer)
+    this.breathTimer = window.setTimeout(() => {
+      const s = this.breathStress
+      if (s === null || !this.ctx) return
+      this.playBreath(s)
+      this.scheduleBreath(3.6 - s * 1.9) // 3.6 c покоя → 1.7 c паники
+    }, delaySec * 1000)
+  }
+
+  private playBreath(stress: number): void {
+    const gain = 0.03 + stress * 0.1
+    this.breathNoise(920, 0.42, gain * 0.8, 0)
+    this.breathNoise(600, 0.95, gain, 0.52)
+    if (stress > 0.75) this.breathNoise(1250, 0.3, gain * 0.5, 1.58)
+  }
+
+  /** Один вдох или выдох: шум через беговой полосовой фильтр. */
+  private breathNoise(freq: number, dur: number, gain: number, when: number): void {
+    const ctx = this.ctx
+    const out = this.master
+    if (!ctx || !out || !this.noise) return
+    const t = ctx.currentTime + when
+    const src = ctx.createBufferSource()
+    src.buffer = this.noise
+    src.loop = true
+    const bp = ctx.createBiquadFilter()
+    bp.type = 'bandpass'
+    bp.frequency.setValueAtTime(freq * 0.8, t)
+    bp.frequency.linearRampToValueAtTime(freq * 1.15, t + dur)
+    bp.Q.value = 1.4
+    const hp = ctx.createBiquadFilter()
+    hp.type = 'highpass'
+    hp.frequency.value = 320
+    const env = ctx.createGain()
+    env.gain.setValueAtTime(0.0001, t)
+    env.gain.linearRampToValueAtTime(gain, t + dur * 0.35)
+    env.gain.exponentialRampToValueAtTime(0.0001, t + dur)
+    src.connect(hp).connect(bp).connect(env).connect(out)
+    src.start(t)
+    src.stop(t + dur + 0.05)
+  }
+
+  // ── скрип пола за спиной ─────────────────────────────────────────
+
+  /**
+   * Скрип деревянного пола сзади оператора: настоящая запись (Wikimedia
+   * Commons, «Creaky wooden swivel chair», public domain), играется изредка
+   * через HRTF-паннер позади слушателя — в наушниках понятно, что скрипят
+   * за спиной. Громкость средняя: заметно, но без акцента.
+   */
+  private loadCreak(): void {
+    const ctx = this.ctx
+    if (!ctx || this.creak) return
+    fetch('sounds/creak.ogg')
+      .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error('нет файла'))))
+      .then((b) => ctx.decodeAudioData(b))
+      .then((buf) => {
+        this.creak = buf
+      })
+      .catch(() => {
+        // без файла просто живём без скрипов
+      })
+  }
+
+  private scheduleCreak(delaySec: number): void {
+    window.setTimeout(() => {
+      this.playCreak()
+      this.scheduleCreak(24 + Math.random() * 32)
+    }, delaySec * 1000)
+  }
+
+  private playCreak(): void {
+    const ctx = this.ctx
+    const out = this.master
+    if (!ctx || !out || !this.creak) return
+    const src = ctx.createBufferSource()
+    src.buffer = this.creak
+    const panner = ctx.createPanner()
+    panner.panningModel = 'HRTF'
+    panner.refDistance = 1
+    panner.rolloffFactor = 0.3
+    if (panner.positionX) {
+      panner.positionX.value = 0.5
+      panner.positionY.value = -0.3
+      panner.positionZ.value = 2.2 // сзади: слушатель смотрит в -Z
+    } else {
+      panner.setPosition(0.5, -0.3, 2.2)
+    }
+    const env = ctx.createGain()
+    const t = ctx.currentTime
+    env.gain.setValueAtTime(0.0001, t)
+    env.gain.linearRampToValueAtTime(0.4, t + 0.7)
+    env.gain.setValueAtTime(0.4, t + Math.max(0.9, this.creak.duration - 1))
+    env.gain.linearRampToValueAtTime(0.0001, t + this.creak.duration)
+    src.connect(panner).connect(env).connect(out)
     src.start(t)
   }
 }
