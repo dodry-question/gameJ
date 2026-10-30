@@ -159,19 +159,16 @@ export class Notepad implements App {
   // ── буфер обмена ─────────────────────────────────────────────────
 
   private copy(): boolean {
-    // Без выделения копируем весь текст: в игре это ожидаемее, чем молчание.
-    const value = this.hasSelection ? this.text.slice(this.selStart, this.selEnd) : this.text
-    if (!value) {
+    if (!this.hasSelection) {
       this.status = 'нечего копировать'
       return false
     }
+    const value = this.text.slice(this.selStart, this.selEnd)
     if (!writeClipboard(value)) {
       this.status = 'браузер не дал доступ к буферу'
       return false
     }
-    this.status = this.hasSelection
-      ? `скопировано: ${value.length} симв.`
-      : `скопирован весь текст: ${value.length} симв.`
+    this.status = `скопировано: ${value.length} симв.`
     return true
   }
 
