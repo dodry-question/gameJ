@@ -102,11 +102,6 @@ await click(matchPair.b.x, matchPair.b.y, 300)
 result.afterMatch = await pairs()
 await page.evaluate(() => window.__pairs.debugSolveStage())
 await page.waitForTimeout(1800)
-await page.keyboard.press('Space')
-await page.waitForTimeout(300)
-await page.evaluate(() => window.__pairs.debugSkipMemorize())
-await page.evaluate(() => window.__pairs.debugSolveStage())
-await page.waitForTimeout(1800)
 result.won = await pairs()
 result.noPrintFormOnGame = await page.evaluate(
   () => typeof window.__pairs.debugForm !== 'function',

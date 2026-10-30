@@ -370,6 +370,11 @@ export class Cctv {
     return this.state === 'toKitchen' || this.state === 'kitchen'
   }
 
+  /** Принтер прямо сейчас печатает — по этому включается звук. */
+  get printerBusy(): boolean {
+    return this.kitchen.printing
+  }
+
   /** Смотреть этим каналом: переключает ракурс камеры. */
   setView(view: '04' | '05'): void {
     if (this.view === view) return
@@ -1212,6 +1217,8 @@ export class Cctv {
   print(code: string): void {
     if (this.state !== 'kitchen' && this.state !== 'toKitchen') return
     this.printedCode = code
+    // новая печать отменяет старую бумажку: печатать можно сколько угодно
+    this.flags.hasPaper = false
     this.kitchen.startPrint()
   }
 
@@ -1361,6 +1368,8 @@ export class Cctv {
     if (t.id === 'exit' && t.action === 'try') {
       if (at > 1.0 && !t.fired) {
         t.fired = true
+        // бумажка потрачена: чтобы попробовать снова — печатай ещё
+        this.flags.hasPaper = false
         if (this.printedCode && this.printedCode === this.exitCode) {
           this.kitchen.setExitOpen(true)
           this.events.push('doorOk')

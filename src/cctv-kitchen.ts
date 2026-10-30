@@ -44,8 +44,9 @@ export type Kitchen = {
   setFridgeOpen(open: boolean): void
   /** Открыть/закрыть дверь выхода. */
   setExitOpen(open: boolean): void
-  /** Запустить печать: диод замигает, бумажка выползет. */
+  /** Запустить печать: диод замигает, лист выползет, звук зашумит. */
   startPrint(): void
+  readonly printing: boolean
   readonly paperReady: boolean
   hidePaper(): void
 }
@@ -313,12 +314,16 @@ export function buildKitchen(scene: THREE.Scene): Kitchen {
   )
   led.position.set(0.2, 0.08, 0.23)
   printer.add(led)
-  // бумажка с паролем: выезжает из щели во время печати
-  const paper = new THREE.Mesh(
-    new THREE.BoxGeometry(0.26, 0.012, 0.3),
-    new THREE.MeshLambertMaterial({ color: 0xe8e4d4 }),
+  // белый лист: выползает из щели и по мере выхода поникает концом вниз
+  const paper = new THREE.Group()
+  const sheet = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.26, 0.42),
+    new THREE.MeshLambertMaterial({ color: 0xf2efe2, side: THREE.DoubleSide }),
   )
-  paper.position.set(0, 0.17, 0.1)
+  sheet.rotation.x = -Math.PI / 2
+  sheet.position.set(0, 0, 0.21)
+  paper.add(sheet)
+  paper.position.set(0, 0.17, 0)
   paper.visible = false
   printer.add(paper)
   // наклейка с адресом на боку принтера
@@ -561,15 +566,18 @@ export function buildKitchen(scene: THREE.Scene): Kitchen {
     exitOpenT += (exitTarget - exitOpenT) * Math.min(1, dt * 2.4)
     exitPivot.rotation.y = -exitOpenT * 1.5
 
-    // печать: диод мигает, бумажка выползает
+    // печать: диод мигает, белый лист выползает и поникает
     if (printLeft > 0) {
       printLeft -= dt
       const blink = Math.floor(time * 6) % 2 === 0
       ;(led.material as THREE.MeshBasicMaterial).color.setHex(blink ? 0xd8b25a : 0x2a2c24)
       if (printLeft <= 1.2) {
         paper.visible = true
-        paperOutT = Math.min(1, paperOutT + dt * 1.4)
-        paper.position.z = 0.1 + paperOutT * 0.24
+        paperOutT = Math.min(1, paperOutT + dt * 1.2)
+        paper.position.z = paperOutT * 0.17
+        const sheetMesh = paper.children[0] as THREE.Mesh
+        sheetMesh.rotation.x = -Math.PI / 2 + paperOutT * 0.55
+        sheetMesh.position.z = 0.21 + paperOutT * 0.08
       }
     } else {
       ;(led.material as THREE.MeshBasicMaterial).color.setHex(0x4f8f57)
@@ -598,7 +606,13 @@ export function buildKitchen(scene: THREE.Scene): Kitchen {
       printLeft = 2.8
       paperOutT = 0
       paper.visible = false
-      paper.position.z = 0.1
+      paper.position.set(0, 0.17, 0)
+      const sheetMesh = paper.children[0] as THREE.Mesh
+      sheetMesh.rotation.x = -Math.PI / 2
+      sheetMesh.position.z = 0.21
+    },
+    get printing(): boolean {
+      return printLeft > 0
     },
     get paperReady(): boolean {
       return paperOutT >= 1

@@ -369,40 +369,92 @@ export class Sound {
   private song: AudioBuffer | null = null
   private songLoading = false
   private songSrc: AudioBufferSourceNode | null = null
+  private songOffset = 0
+  private songStartedAt = 0
+
+  /** Начать загрузку песенки заранее, не проигрывая. */
+  prefetchSong(): void {
+    const ctx = this.ctx
+    if (!ctx || this.song || this.songLoading) return
+    this.songLoading = true
+    fetch('sounds/' + encodeURIComponent('песенка для малыша.ogg'))
+      .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error('нет файла'))))
+      .then((b) => ctx.decodeAudioData(b))
+      .then((buf) => {
+        this.song = buf
+        this.songLoading = false
+      })
+      .catch(() => {
+        this.songLoading = false
+      })
+  }
+
+  /** Статус песенки: грузится, играет, стоит на паузе и где она сейчас. */
+  get songStatus(): {
+    loading: boolean
+    playing: boolean
+    paused: boolean
+    position: number
+    duration: number
+  } {
+    const ctx = this.ctx
+    const playing = this.songSrc !== null
+    const duration = this.song?.duration ?? 0
+    const position = playing
+      ? Math.min(duration, this.songOffset + (ctx ? ctx.currentTime - this.songStartedAt : 0))
+      : this.songOffset
+    return {
+      loading: this.songLoading,
+      playing,
+      paused: !playing && !this.songLoading && duration > 0,
+      position,
+      duration,
+    }
+  }
 
   /**
    * Песенка-пасхалка из папки «Музыка»: играет один раз, без зацикливания.
-   * Повторный клик — начинает сначала.
+   * Повторный вызов — начинает сначала.
    */
   playSong(): void {
     const ctx = this.ctx
     const out = this.master
     if (!ctx || !out) return
     if (!this.song) {
-      if (this.songLoading) return
-      this.songLoading = true
-      fetch('sounds/' + encodeURIComponent('песенка для малыша.ogg'))
-        .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error('нет файла'))))
-        .then((b) => ctx.decodeAudioData(b))
-        .then((buf) => {
-          this.song = buf
-          this.songLoading = false
-          this.playSong()
-        })
-        .catch(() => {
-          this.songLoading = false
-        })
+      this.prefetchSong()
       return
     }
-    // предыдущий запуск глушим: «перематываем» на начало
-    if (this.songSrc) {
-      try {
-        this.songSrc.stop()
-      } catch {
-        /* уже закончилась */
-      }
-      this.songSrc = null
+    this.songOffset = 0
+    this.startSongSource()
+  }
+
+  /** Пауза: запоминаем позицию и глушим источник. */
+  pauseSong(): void {
+    const ctx = this.ctx
+    if (!ctx || !this.songSrc) return
+    this.songOffset = Math.min(
+      this.song?.duration ?? 0,
+      this.songOffset + (ctx.currentTime - this.songStartedAt),
+    )
+    try {
+      this.songSrc.stop()
+    } catch {
+      /* уже остановлен */
     }
+    this.songSrc = null
+  }
+
+  /** Продолжить с паузы; на конце песни — ничего. */
+  resumeSong(): void {
+    if (!this.song || this.songSrc) return
+    if (this.songOffset >= this.song.duration - 0.05) this.songOffset = 0
+    this.startSongSource()
+  }
+
+  private startSongSource(): void {
+    const ctx = this.ctx
+    const out = this.master
+    if (!ctx || !out || !this.song) return
     const src = ctx.createBufferSource()
     src.buffer = this.song
     src.loop = false // пасхалка играет ровно один раз
@@ -410,18 +462,129 @@ export class Sound {
     const t = ctx.currentTime
     g.gain.setValueAtTime(0.0001, t)
     g.gain.linearRampToValueAtTime(0.55, t + 0.3)
-    g.gain.setValueAtTime(0.55, t + Math.max(0.5, this.song.duration - 1.2))
-    g.gain.linearRampToValueAtTime(0.0001, t + this.song.duration)
+    const remain = Math.max(0.1, this.song.duration - this.songOffset)
+    g.gain.setValueAtTime(0.55, t + Math.max(0.5, remain - 1.2))
+    g.gain.linearRampToValueAtTime(0.0001, t + remain)
     src.connect(g).connect(out)
-    src.start(t)
+    src.start(t, this.songOffset)
     this.songSrc = src
+    this.songStartedAt = t
     src.onended = () => {
-      this.songSrc = null
+      if (this.songSrc === src) {
+        this.songSrc = null
+        this.songOffset = 0
+      }
     }
   }
 
   get songPlaying(): boolean {
     return this.songSrc !== null
+  }
+
+  // ── принтер кухни: реальные записи с Wikimedia Commons ────────────
+
+  private printerWarm: AudioBuffer | null = null
+  private printerRun: AudioBuffer | null = null
+  private printerLoading = false
+  private printerWanted = false
+  private printerBus: GainNode | null = null
+  private printerSrc: AudioBufferSourceNode[] = []
+  private printerRunGain: GainNode | null = null
+
+  /**
+   * Принтер заработал: сначала прогрев (щёлчок питания, разгон роликов —
+   * «Inkjet printer on and off», stephan, Wikimedia Commons), затем в него
+   * вливается шум матричного Star LC-10 (там же) — печатает, пока не
+   * выключат.
+   */
+  printerOn(): void {
+    this.printerWanted = true
+    const ctx = this.ctx
+    if (!ctx) return
+    if (!this.printerWarm || !this.printerRun) {
+      this.loadPrinter()
+      return
+    }
+    if (this.printerBus) return // уже гудит
+    const bus = ctx.createGain()
+    bus.gain.value = 0.4
+    bus.connect(this.master!)
+    this.printerBus = bus
+    this.printerSrc = []
+
+    const warm = ctx.createBufferSource()
+    warm.buffer = this.printerWarm
+    warm.connect(bus)
+    warm.start()
+    this.printerSrc.push(warm)
+
+    const run = ctx.createBufferSource()
+    run.buffer = this.printerRun
+    run.loop = true
+    const rg = ctx.createGain()
+    rg.gain.setValueAtTime(0.0001, ctx.currentTime)
+    rg.gain.linearRampToValueAtTime(0.8, ctx.currentTime + 1.2) // прогрелся — шумит
+    run.connect(rg).connect(bus)
+    run.start(ctx.currentTime + 0.1)
+    this.printerSrc.push(run)
+    this.printerRunGain = rg
+  }
+
+  /** Печать закончилась: плавно глушим и разбираем узлы. */
+  printerOff(): void {
+    this.printerWanted = false
+    const ctx = this.ctx
+    const bus = this.printerBus
+    if (!ctx || !bus) return
+    const t = ctx.currentTime
+    bus.gain.setValueAtTime(bus.gain.value, t)
+    bus.gain.linearRampToValueAtTime(0.0001, t + 0.4)
+    const srcs = this.printerSrc
+    const rg = this.printerRunGain
+    window.setTimeout(() => {
+      for (const s of srcs) {
+        try {
+          s.stop()
+        } catch {
+          /* уже остановлен */
+        }
+      }
+      try {
+        rg?.disconnect()
+      } catch {
+        /* уже отключён */
+      }
+      try {
+        bus.disconnect()
+      } catch {
+        /* уже отключён */
+      }
+    }, 500)
+    this.printerBus = null
+    this.printerSrc = []
+    this.printerRunGain = null
+  }
+
+  private loadPrinter(): void {
+    if (this.printerLoading) return
+    this.printerLoading = true
+    const grab = (file: string): Promise<AudioBuffer> =>
+      fetch('sounds/' + file)
+        .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error('нет файла'))))
+        .then((b) => this.ctx!.decodeAudioData(b))
+    void grab('printer-warm.ogg')
+      .then((buf) => {
+        this.printerWarm = buf
+        return grab('printer-run.ogg')
+      })
+      .then((buf) => {
+        this.printerRun = buf
+        this.printerLoading = false
+        if (this.printerWanted) this.printerOn()
+      })
+      .catch(() => {
+        this.printerLoading = false
+      })
   }
 
   private murzik: AudioBuffer | null = null

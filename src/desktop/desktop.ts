@@ -6,6 +6,7 @@ import { Browser } from './apps/browser'
 import { Explorer } from './apps/explorer'
 import type { DeskFile } from './apps/explorer'
 import { ImageViewer } from './apps/image-viewer'
+import { MusicPlayer } from './apps/music-player'
 import { Mail } from './apps/mail'
 import { Note } from './apps/note'
 import { Notepad } from './apps/notepad'
@@ -52,6 +53,7 @@ const LAUNCH_MS: Record<string, number> = {
   computer: 550,
   trash: 450,
   image: 450,
+  music: 0,
 }
 
 type Win = {
@@ -87,6 +89,7 @@ const SIZES: Record<string, Rect> = {
   computer: { x: 280, y: 110, w: 580, h: 400 },
   trash: { x: 300, y: 190, w: 350, h: 180 },
   image: { x: 230, y: 100, w: 500, h: 510 },
+  music: { x: 320, y: 200, w: 300, h: 234 },
 }
 
 /** Терминал открывается развёрнутым: карта должна занимать весь экран. */
@@ -444,6 +447,7 @@ export class Desktop {
       return new Explorer(this.sound, () => this.explorerFiles(), (file) => this.openDeskFile(file))
     }
     if (key === 'image') return new ImageViewer('dodry.jpg')
+    if (key === 'music') return new MusicPlayer(this.sound)
     return new Note('Корзина', ['Корзина пуста.', '', 'Здесь ничего нет. Пока.'])
   }
 
@@ -1202,9 +1206,8 @@ export class Desktop {
       this.pendingImage = file.name
       this.open('image')
     } else if (file.kind === 'audio') {
-      // пасхалка: песенка играет один раз, без зацикливания
-      this.sound.playSong()
-      this.dirty = true
+      // пасхалка: мгновенно открываем проигрыватель (грузится и играет в нём)
+      this.open('music')
     } else this.open('tds')
   }
 

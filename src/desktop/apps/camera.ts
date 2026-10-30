@@ -45,6 +45,8 @@ export class CameraFeed {
   private menu: { x: number; y: number; id: string; items: Array<{ label: string; action: string }> } | null = null
   private menuHit: MenuItem[] = []
   private feedRect: Rect | null = null
+  /** Звук принтера: включён, пока кухня печатает. */
+  private printerSoundOn = false
 
   /**
    * Кнопка «Открыть дверь» больше не отпирает замок сама: терминал выдаёт
@@ -183,6 +185,14 @@ export class CameraFeed {
         if (ev === 'doorDeny') this.sound.error()
         else if (ev === 'doorOk') this.sound.open()
       }
+    }
+    // принтер: пока печатает — гудит (прогрев, потом шум)
+    if (cctv.printerBusy && !this.printerSoundOn) {
+      this.printerSoundOn = true
+      this.sound.printerOn()
+    } else if (!cctv.printerBusy && this.printerSoundOn) {
+      this.printerSoundOn = false
+      this.sound.printerOff()
     }
     return true
   }
@@ -338,6 +348,7 @@ export class CameraFeed {
       ctx.filter = blur > 0.4 ? `blur(${blur.toFixed(1)}px)` : 'none'
       ctx.drawImage(cctv.canvas, 0, 0, FEED_W, FEED_H, f.x, f.y, f.w, f.h)
       ctx.filter = 'none'
+      ctx.globalAlpha = 1
 
       // редкие сдвинутые полосы помех, пока кадр не собрался
       ctx.globalCompositeOperation = 'lighter'
@@ -349,6 +360,9 @@ export class CameraFeed {
         ctx.drawImage(this.noise, f.x + dx, sy, f.w, sh, f.x, sy, f.w, sh)
       }
       ctx.globalCompositeOperation = 'source-over'
+      // фильтр (тон, строки, виньетка) проявляется вместе с кадром — иначе
+      // в последний момент картинка скачком становится яркой
+      this.overlay(ctx, f, p)
       ctx.restore()
     }
 
@@ -379,11 +393,12 @@ export class CameraFeed {
   }
 
   /** Наложение записи: зелёный тон, строки развёртки, шум и время. */
-  private overlay(ctx: CanvasRenderingContext2D, f: Rect): void {
+  private overlay(ctx: CanvasRenderingContext2D, f: Rect, strength = 1): void {
     ctx.save()
     ctx.beginPath()
     ctx.rect(f.x, f.y, f.w, f.h)
     ctx.clip()
+    ctx.globalAlpha = strength
 
     ctx.globalCompositeOperation = 'multiply'
     ctx.fillStyle = 'rgba(160, 215, 175, 0.75)'
@@ -393,9 +408,9 @@ export class CameraFeed {
     ctx.fillStyle = 'rgba(0, 0, 0, 0.16)'
     for (let y = f.y; y < f.y + f.h; y += 3) ctx.fillRect(f.x, y, f.w, 1)
 
-    ctx.globalAlpha = 0.5
+    ctx.globalAlpha = 0.5 * strength
     ctx.drawImage(this.noise, f.x, f.y, f.w, f.h)
-    ctx.globalAlpha = 1
+    ctx.globalAlpha = strength
 
     // бегущая полоса помех
     const bandY = f.y + ((this.t * 60) % (f.h + 40)) - 20
@@ -416,13 +431,15 @@ export class CameraFeed {
     ctx.fillStyle = g
     ctx.fillRect(f.x, f.y, f.w, f.h)
 
+    ctx.globalAlpha = 1
+
     // время и номер кадра
     const now = new Date()
-    const p = (n: number): string => String(n).padStart(2, '0')
+    const pd = (n: number): string => String(n).padStart(2, '0')
     setFont(ctx, 10)
     ctx.fillStyle = 'rgba(200, 240, 210, 0.8)'
     ctx.fillText(
-      `12.11.2000  ${p(now.getHours())}:${p(now.getMinutes())}:${p(now.getSeconds())}`,
+      `12.11.2000  ${pd(now.getHours())}:${pd(now.getMinutes())}:${pd(now.getSeconds())}`,
       f.x + 8,
       f.y + f.h - 10,
     )

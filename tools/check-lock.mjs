@@ -173,13 +173,25 @@ await click(330, 225, 900) // открыть dodry.jpg (первая в папк
 result.windowsAfterImage = await windows()
 await shot('10-image-viewer')
 
-// ── 7. Пасхалка «Музыка»: песенка запускается кликом ─────────────────
+// ── 7. Пасхалка «Музыка»: плеер открывается сразу и играет ───────────
 await click(455, 704, 400) // поднимаем «Мой компьютер» из панели задач
 await click(377, 145, 300) // Вверх → корень
 await click(520, 225, 400) // папка «Музыка»
 await shot('11-music-folder')
-await click(330, 225, 3000) // «песенка для малыша.ogg» → грузится и играет
-result.songPlaying = await page.evaluate(() => window.__desk?.sound?.songPlaying ?? null)
+await click(330, 225, 400) // файл → мгновенно открывается проигрыватель
+result.playerOpen = await page.evaluate(() =>
+  window.__desk?.windows.some((w) => w.app.title.includes('Проигрыватель')) ?? null,
+)
+await page.waitForTimeout(3500) // файл докачался и завёлся сам
+result.songPlaying = await page.evaluate(() => window.__desk?.sound?.songStatus?.playing ?? null)
+result.songLoading = await page.evaluate(() => window.__desk?.sound?.songStatus?.loading ?? null)
+// пауза и продолжение
+await page.evaluate(() => window.__desk?.sound?.pauseSong())
+await page.waitForTimeout(200)
+result.songPaused = await page.evaluate(() => window.__desk?.sound?.songStatus?.paused ?? null)
+await page.evaluate(() => window.__desk?.sound?.resumeSong())
+await page.waitForTimeout(200)
+result.songResumed = await page.evaluate(() => window.__desk?.sound?.songStatus?.playing ?? null)
 await shot('12-song-playing')
 
 console.log(JSON.stringify(result, null, 2))

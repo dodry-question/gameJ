@@ -118,12 +118,7 @@ result.noteTextAfterPrinter = await page.evaluate(() =>
 await click(38, 704, 300)
 await click(110, 522, 1500)
 result.pairsPage = await navigate('pairs.local')
-await page.keyboard.press('Space') // этап 1: показ
-await page.waitForTimeout(300)
-await page.evaluate(() => window.__pairs.debugSkipMemorize())
-await page.evaluate(() => window.__pairs.debugSolveStage())
-await page.waitForTimeout(1800)
-await page.keyboard.press('Space') // этап 2: показ
+await page.keyboard.press('Space') // показ карт
 await page.waitForTimeout(300)
 await page.evaluate(() => window.__pairs.debugSkipMemorize())
 await page.evaluate(() => window.__pairs.debugSolveStage())
@@ -132,12 +127,23 @@ const password = await page.evaluate(() => window.__pairs.debugState().password)
 result.password = password
 await shot('05-code')
 
-// печать на отдельном узле print.local
+// печать на отдельном узле print.local: сначала НЕВЕРНЫЙ код — она дойдёт
+// до двери, дверь откажет; потом верный — уходит. Печатать можно всегда.
 result.printPage = await navigate('print.local')
 const form = await page.evaluate(() => window.__printsite?.debugForm() ?? null)
 await click(form.input.x, form.input.y, 200)
+await page.keyboard.type('0000', { delay: 40 })
+await click(form.print.x, form.print.y, 400)
+result.printedWrong = (await desk()).printed
+await shot('06-printed-wrong')
+await page.waitForTimeout(11000) // печать + сбор бумаги + отказ двери
+result.afterWrong = await page.evaluate(() => ({
+  hasPaper: window.__cctv.flags.hasPaper,
+  task: window.__cctv.task,
+}))
+await click(form.input.x, form.input.y, 200)
 await page.keyboard.type(password, { delay: 40 })
-await click(form.print.x, form.print.y, 600)
+await click(form.print.x, form.print.y, 400)
 result.printed = (await desk()).printed
 await shot('06-printed')
 

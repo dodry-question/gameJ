@@ -18,10 +18,8 @@ import type { Sound } from '../../audio'
 
 type Stage = { cols: number; rows: number; pairs: number; showMs: number }
 
-const STAGES: Stage[] = [
-  { cols: 9, rows: 9, pairs: 8, showMs: 6000 },
-  { cols: 12, rows: 12, pairs: 12, showMs: 8000 },
-]
+/** Один этап: 12×12 сочли слишком злым — осталась только сетка 9×9. */
+const STAGES: Stage[] = [{ cols: 9, rows: 9, pairs: 8, showMs: 6000 }]
 const ATTEMPTS = 8 // на каждый этап
 const PEEKS = 3 // подсматриваний на каждый этап
 const MISS_MS = 700 // сколько висит несовпавшая пара
@@ -437,7 +435,7 @@ export class PairsGame {
     ctx.fillStyle = '#9fd39f'
     ctx.textBaseline = 'middle'
     ctx.textAlign = 'left'
-    ctx.fillText(`ЭТАП ${this.stage + 1}/2 · СЕТКА ${s.cols}×${s.rows}`, r.x + 10, r.y + hud / 2)
+    ctx.fillText(`СЕТКА ${s.cols}×${s.rows}`, r.x + 10, r.y + hud / 2)
     ctx.textAlign = 'center'
     ctx.fillStyle = '#c9ccc6'
     ctx.fillText(`ПАРЫ: ${found}/${this.cards.length / 2}`, r.x + r.w / 2, r.y + hud / 2)
@@ -456,7 +454,7 @@ export class PairsGame {
     const h = 190
     const p: Rect = { x: r.x + (r.w - w) / 2, y: r.y + Math.max(10, (r.h - h) / 2 - 8), w, h }
     panel(ctx, p, true, 2)
-    text(ctx, `ЭТАП ${this.stage + 1} ИЗ 2`, p.x + w / 2, p.y + 22, {
+    text(ctx, 'ГОЛОВОЛОМКА ПАР', p.x + w / 2, p.y + 22, {
       size: 14,
       bold: true,
       color: '#16160f',
@@ -628,6 +626,8 @@ export class PrintSite {
       this.printed = true
       this.sound.busy()
       this.onPrint?.(this.input)
+      // поле чистится: печатать можно сколько угодно раз, каждый лист — свой код
+      this.input = ''
       return true
     }
     this.focus = false
