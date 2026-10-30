@@ -187,6 +187,9 @@ export class Desktop {
       if (win.min) continue
       if (win.app.tick?.()) this.dirty = true
     }
+    // Дыхание слышно только пока окно камеры открыто: свернули или закрыли — тишина.
+    const cameraOpen = this.windows.some((w) => !w.min && w.app instanceof Camera)
+    if (!cameraOpen) this.sound.setBreathing(null)
 
     const minute = new Date().getMinutes()
     if (minute !== this.lastMinute) {
@@ -252,7 +255,7 @@ export class Desktop {
   private makeApp(key: string): App {
     if (key === 'browser') return new Browser(this.sound)
     if (key === 'mail') return this.getMail()
-    if (key === 'map') return new MapApp(this.sound)
+    if (key === 'map') return new MapApp()
     if (key === 'computer') return new Explorer(this.sound)
     if (key === 'camera') {
       const cam = new Camera(this.sound)
@@ -526,24 +529,27 @@ export class Desktop {
   }
 
   private dropPayload(): void {
-    if (this.icons.some((i) => i.id === 'cam04')) return
-    this.icons.push({
-      id: 'cam04',
-      label: 'cam04.exe',
-      glyph: 'camera',
-      app: 'camera',
-      x: 104,
-      y: 8,
-    })
+    if (!this.icons.some((i) => i.id === 'cam04')) {
+      this.icons.push({
+        id: 'cam04',
+        label: 'cam04.exe',
+        glyph: 'camera',
+        app: 'camera',
+        x: 104,
+        y: 8,
+      })
+    }
     // карта наблюдения приезжает тем же архивом
-    this.icons.push({
-      id: 'map',
-      label: 'Карта',
-      glyph: 'map',
-      app: 'map',
-      x: 104,
-      y: 102,
-    })
+    if (!this.icons.some((i) => i.id === 'map')) {
+      this.icons.push({
+        id: 'map',
+        label: 'Карта',
+        glyph: 'map',
+        app: 'map',
+        x: 104,
+        y: 102,
+      })
+    }
   }
 
   private drawInstall(): void {
@@ -728,7 +734,7 @@ export class Desktop {
     if (this.toast.kind === 'file') {
       drawIcon(ctx, 'camera', r.x + 28, r.y + 44, 1)
       text(ctx, 'Установка завершена', r.x + 50, r.y + 32, { size: 12, bold: true })
-      text(ctx, 'На рабочем столе: cam04.exe', r.x + 50, r.y + 50, { size: 11, color: C.alert })
+      text(ctx, 'На рабочем столе: cam04.exe и Карта', r.x + 50, r.y + 50, { size: 11, color: C.alert })
       text(ctx, 'Запустите файл, чтобы открыть камеру', r.x + 50, r.y + 68, {
         size: 10,
         color: C.textDim,

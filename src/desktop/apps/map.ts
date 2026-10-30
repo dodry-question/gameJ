@@ -6,28 +6,19 @@
  * теряет, кружок медленно гаснет на последнем замеченном месте, как радар в CS.
  * Приложение приезжает на стол вместе с распаковкой cam04-archive.zip.
  */
-import { fill, inside, panel, setFont, text } from '../draw'
+import { fill, panel, setFont, text } from '../draw'
 import type { Rect } from '../draw'
 import type { App } from '../app'
-import type { Sound } from '../../audio'
 import { getCctv } from '../../cctv'
-
-type Hit = { r: Rect; fn: () => void }
 
 /** Границы пола в мировых координатах (комната 6×5 с центром (0, -0.5)). */
 const WORLD = { x0: -3, x1: 3, z0: -3, z1: 2 }
 
 export class MapApp implements App {
   title = 'Сеть наблюдения · блок C'
-  private hits: Hit[] = []
-  private sound: Sound
   /** Яркость метки объекта: 1 — в кадре, плавно гаснет после потери. */
   private alpha = 0
   private lastSeen: { x: number; z: number } | null = null
-
-  constructor(sound: Sound) {
-    this.sound = sound
-  }
 
   tick(): boolean {
     const cctv = getCctv()
@@ -56,7 +47,6 @@ export class MapApp implements App {
   }
 
   draw(ctx: CanvasRenderingContext2D, r: Rect): void {
-    this.hits = []
     fill(ctx, r, '#12100c')
 
     const area: Rect = { x: r.x + 18, y: r.y + 18, w: r.w - 36, h: r.h - 66 }
@@ -114,47 +104,35 @@ export class MapApp implements App {
     ctx.strokeStyle = '#a08c5c'
     ctx.strokeRect(chair.mx - 4, chair.my - 4, 8, 8)
 
-    // камеры: сектор обзора и точка, кликом переключается ракурс
+    // единственная камера комнаты: сектор обзора и точка
     const cctv = getCctv()
-    for (let i = 0; i < cctv.views.length; i++) {
-      const v = cctv.views[i]
-      const cur = cctv.getView() === i
-      const p = this.worldToMap(v.pos[0], v.pos[2], area)
-      // сектор
-      const ang = Math.atan2(v.at[2] - v.pos[2], v.at[0] - v.pos[0])
-      const half = ((v.fov / 2) * Math.PI) / 180
-      const len = 52
-      const tipX = p.mx + Math.cos(ang) * len
-      const tipY = p.my + Math.sin(ang) * len
-      const lx = p.mx + Math.cos(ang - half) * len
-      const ly = p.my + Math.sin(ang - half) * len
-      const rx = p.mx + Math.cos(ang + half) * len
-      const ry = p.my + Math.sin(ang + half) * len
-      ctx.fillStyle = cur ? 'rgba(140, 220, 150, 0.16)' : 'rgba(140, 220, 150, 0.07)'
-      ctx.beginPath()
-      ctx.moveTo(p.mx, p.my)
-      ctx.lineTo(lx, ly)
-      ctx.lineTo(tipX, tipY)
-      ctx.lineTo(rx, ry)
-      ctx.closePath()
-      ctx.fill()
-      // точка камеры
-      const node: Rect = { x: p.mx - 11, y: p.my - 11, w: 22, h: 22 }
-      panel(ctx, node, cur, 1)
-      setFont(ctx, 10, cur)
-      ctx.fillStyle = cur ? '#d8e4d0' : '#8f948d'
-      ctx.textAlign = 'center'
-      ctx.fillText(String(i + 1), p.mx, p.my + 1)
-      ctx.textAlign = 'left'
-      const idx = i
-      this.hits.push({
-        r: node,
-        fn: () => {
-          cctv.setView(idx)
-          this.sound.click()
-        },
-      })
-    }
+    const v = cctv.cam
+    const p = this.worldToMap(v.pos[0], v.pos[2], area)
+    const ang = Math.atan2(v.at[2] - v.pos[2], v.at[0] - v.pos[0])
+    const half = ((v.fov / 2) * Math.PI) / 180
+    const len = 52
+    const tipX = p.mx + Math.cos(ang) * len
+    const tipY = p.my + Math.sin(ang) * len
+    const lx = p.mx + Math.cos(ang - half) * len
+    const ly = p.my + Math.sin(ang - half) * len
+    const rx = p.mx + Math.cos(ang + half) * len
+    const ry = p.my + Math.sin(ang + half) * len
+    ctx.fillStyle = 'rgba(140, 220, 150, 0.14)'
+    ctx.beginPath()
+    ctx.moveTo(p.mx, p.my)
+    ctx.lineTo(lx, ly)
+    ctx.lineTo(tipX, tipY)
+    ctx.lineTo(rx, ry)
+    ctx.closePath()
+    ctx.fill()
+    // точка камеры
+    const node: Rect = { x: p.mx - 11, y: p.my - 11, w: 22, h: 22 }
+    panel(ctx, node, true, 1)
+    setFont(ctx, 9, true)
+    ctx.fillStyle = '#23231c'
+    ctx.textAlign = 'center'
+    ctx.fillText('04', p.mx, p.my + 1)
+    ctx.textAlign = 'left'
 
     // объект: горит, пока в кадре, гаснет на последнем месте после потери
     if (this.lastSeen && this.alpha > 0) {
@@ -175,7 +153,7 @@ export class MapApp implements App {
     }
 
     // подвал: подсказка и статус
-    text(ctx, 'Блок C · камера 1 · комната 4', r.x + 12, r.y + r.h - 16, {
+    text(ctx, 'Блок C · КАМ-04', r.x + 12, r.y + r.h - 16, {
       size: 10,
       color: '#8f948d',
     })
@@ -196,12 +174,7 @@ export class MapApp implements App {
     }
   }
 
-  click(x: number, y: number, _r: Rect): void {
-    for (let i = this.hits.length - 1; i >= 0; i--) {
-      if (inside(this.hits[i].r, x, y)) {
-        this.hits[i].fn()
-        return
-      }
-    }
+  click(_x: number, _y: number, _r: Rect): void {
+    // в комнате одна камера — переключать нечего
   }
 }

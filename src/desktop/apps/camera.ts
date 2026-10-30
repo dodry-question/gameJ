@@ -117,13 +117,12 @@ export class Camera implements App {
     ctx.strokeRect(feed.x + 0.5, feed.y + 0.5, feed.w - 1, feed.h - 1)
 
     // ── шапка записи ────────────────────────────────────────────────
-    const viewNames = ['КОРИДОР, БЛОК C', 'ДВЕРЬ, БЛОК C', 'УГОЛ, БЛОК C']
     setFont(ctx, 11, true)
     ctx.fillStyle = '#8fd08f'
     ctx.textBaseline = 'middle'
     ctx.fillText('CAM 04', head.x + 2, head.y + head.h / 2)
     ctx.fillStyle = '#c9ccc6'
-    ctx.fillText(`· ${viewNames[this.cctv.getView()]}`, head.x + 62, head.y + head.h / 2)
+    ctx.fillText('· КОМНАТА 4, БЛОК C', head.x + 62, head.y + head.h / 2)
 
     if (Math.floor(this.t * 2) % 2 === 0) {
       ctx.fillStyle = '#c0392b'

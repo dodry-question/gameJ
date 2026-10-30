@@ -89,13 +89,15 @@ export class Cctv {
   /** 0 — стоит на месте, 1 — идёт: плавная смесь поз. */
   private moveBlend = 0
   /** Единственная камера в комнате: общий вид из правого верхнего угла. */
-  static VIEWS: Array<{ pos: [number, number, number]; at: [number, number, number]; fov: number }> = [
-    { pos: [1.7, 2.2, 1.4], at: [-0.55, 0.85, -1.3], fov: 58 },
-  ]
+  static readonly CAM = {
+    pos: [1.7, 2.2, 1.4] as [number, number, number],
+    at: [-0.55, 0.85, -1.3] as [number, number, number],
+    fov: 58,
+  }
 
-  /** Видит ли текущая камера точку (x, z) — для радара на карте. */
+  /** Видит ли камера точку (x, z) — для радара на карте. */
   sees(x: number, z: number): boolean {
-    const v = Cctv.VIEWS[this.view]
+    const v = Cctv.CAM
     const dx = v.at[0] - v.pos[0]
     const dz = v.at[2] - v.pos[2]
     const px = x - v.pos[0]
@@ -106,9 +108,6 @@ export class Cctv {
     const half = (v.fov / 2) * 0.95 * (Math.PI / 180)
     return (dx * px + dz * pz) / (dl * pl) > Math.cos(half)
   }
-
-  /** Текущий ракурс (индекс в VIEWS). */
-  private view = 0
 
   constructor() {
     this.canvas = document.createElement('canvas')
@@ -126,7 +125,7 @@ export class Cctv {
 
     this.scene.fog = new THREE.Fog(0x05070a, 3.5, 9)
 
-    this.applyView(0)
+    this.applyCam()
 
     this.scene.add(new THREE.AmbientLight(0x3a4048, 1.4))
     this.lamp = new THREE.PointLight(0xffd9a0, 14, 9, 2)
@@ -290,23 +289,13 @@ export class Cctv {
     return this.state === 'gone'
   }
 
-  /** Поставить камеру наблюдения в ракурс. */
-  setView(index: number): void {
-    this.view = ((index % Cctv.VIEWS.length) + Cctv.VIEWS.length) % Cctv.VIEWS.length
-    this.applyView(this.view)
+  /** Параметры единственной камеры — для карты и радара. */
+  get cam(): typeof Cctv.CAM {
+    return Cctv.CAM
   }
 
-  getView(): number {
-    return this.view
-  }
-
-  /** Ракурсы для карты: позиции, направления и углы обзора. */
-  get views(): typeof Cctv.VIEWS {
-    return Cctv.VIEWS
-  }
-
-  private applyView(index: number): void {
-    const v = Cctv.VIEWS[index]
+  private applyCam(): void {
+    const v = Cctv.CAM
     this.camera.fov = v.fov
     this.camera.position.set(...v.pos)
     this.camera.lookAt(...v.at)
@@ -513,15 +502,15 @@ export class Cctv {
       this.targetZ = -2.05
       this.yawTarget = Math.PI
     } else {
-      // стоит: дышит, переминается, оглядывается на камеру
+      // стоит: дышит, переминается, смотрит в сторону двери, не в камеру
       base.Spine = [Math.sin(t * 1.6) * 0.03 + 0.05, Math.sin(t * 0.35) * 0.06, 0]
-      base.Head = [0, Math.sin(t * 0.5) * 0.5, 0]
+      base.Head = [0, Math.sin(t * 0.5) * 0.35, 0]
       base.LeftArm = [1.3, 0, Math.sin(t * 1.4) * 0.05]
       base.RightArm = [1.3, 0, -Math.sin(t * 1.4) * 0.05]
       this.targetX = CHAIR.x + Math.sin(t * 0.25) * 0.25
       this.targetZ = -1.4
-      // лицом к камере
-      this.yawTarget = Math.atan2(1.7 - g.position.x, 1.4 - g.position.z)
+      // лицом к двери, спиной к камере
+      this.yawTarget = Math.PI
     }
 
     for (const [bone, a] of Object.entries(base)) this.pose(bone, a[0], a[1], a[2])

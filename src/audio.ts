@@ -15,6 +15,7 @@ export class Sound {
   private ambient: AudioBuffer | null = null
   private ambientLoading = false
   private creak: AudioBuffer | null = null
+  private creakLoading = false
   private breath: AudioBuffer | null = null
   private breathLoading = false
   private breathStress: number | null = null
@@ -279,6 +280,7 @@ export class Sound {
     const t = ctx.currentTime
 
     if (stress === null) {
+      if (!this.breathSrc) return
       if (this.breathSrc && this.breathGain) {
         const g = this.breathGain
         const src = this.breathSrc
@@ -341,14 +343,15 @@ export class Sound {
   // ── скрип пола за спиной ─────────────────────────────────────────
 
   /**
-   * Скрип деревянного пола сзади оператора: настоящая запись (Wikimedia
-   * Commons, «Creaky wooden swivel chair», public domain), играется изредка
-   * через HRTF-паннер позади слушателя — в наушниках понятно, что скрипят
-   * за спиной. Громкость средняя: заметно, но без акцента.
+   * Скрип деревянного пола сзади оператора: настоящая запись шага по старому
+   * дереву (Freesound, Rudmer_Rotteveel «Wood Creak Single V10», CC0),
+   * играется изредка через HRTF-паннер позади слушателя — в наушниках понятно,
+   * что скрипят за спиной. Громкость средняя: заметно, но без акцента.
    */
   private loadCreak(): void {
     const ctx = this.ctx
-    if (!ctx || this.creak) return
+    if (!ctx || this.creak || this.creakLoading) return
+    this.creakLoading = true
     fetch('sounds/creak.mp3')
       .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error('нет файла'))))
       .then((b) => ctx.decodeAudioData(b))
@@ -356,6 +359,7 @@ export class Sound {
         this.creak = buf
       })
       .catch(() => {
+        this.creakLoading = false
         // без файла просто живём без скрипов
       })
   }
@@ -373,12 +377,7 @@ export class Sound {
     if (!ctx || !out || !this.creak) return
     this.playOneCreak()
     // иногда скрипнет пару раз подряд, как человек, переступающий с ноги на ногу
-    if (Math.random() < 0.45) {
-      const src2 = ctx.createBufferSource()
-      src2.buffer = this.creak
-      void src2
-      window.setTimeout(() => this.playOneCreak(0.7 + Math.random() * 0.6), 900)
-    }
+    if (Math.random() < 0.45) this.playOneCreak(0.7 + Math.random() * 0.6)
   }
 
   private playOneCreak(when = 0): void {
