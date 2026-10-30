@@ -10,16 +10,11 @@ import { C, bevel, fill, inside, panel, setFont, text, wrap } from '../draw'
 import type { Rect } from '../draw'
 import type { App } from '../app'
 import type { Sound } from '../../audio'
-import { Camera } from './camera'
-import { MapApp } from './map'
-import { CAM_URL, MAP_URL } from '../domains'
 
 type Page =
   | 'home'
   | 'search'
   | 'cams'
-  | 'cam'
-  | 'map'
   | 'journal'
   | 'files'
   | 'gate'
@@ -40,8 +35,6 @@ const URLS = {
   home: 'http://intranet.local/',
   search: 'http://intranet.local/cgi-bin/search?q=kamery',
   cams: 'http://intranet.local/security/cams/',
-  cam: CAM_URL,
-  map: MAP_URL,
   journal: 'http://intranet.local/journal/',
   files: 'http://intranet.local/files/blok-c/',
   gate: 'http://intranet.local/gate/',
@@ -84,8 +77,6 @@ const MENU = ['Файл', 'Правка', 'Вид', 'Переход', 'Связ�
 
 export class Browser implements App {
   title = 'Netscape Navigator'
-  /** Первый показ страницы камеры: сценарий присылает письмо похитителей. */
-  onFirstCameraView?: () => void
   private page: Page = 'home'
   private url: string = URLS.home
   private history: string[] = [URLS.home]
@@ -101,25 +92,9 @@ export class Browser implements App {
   private t = 0
   private status = 'готово'
   private sound: Sound
-  private pageRect: Rect | null = null
-  private camView: Camera | null = null
-  private mapView: MapApp | null = null
-  private access = false
-  private camVisited = false
 
   constructor(sound: Sound) {
     this.sound = sound
-  }
-
-  /** Доступ к замку камеры: открывается после прочтения письма. */
-  setAccess(allowed: boolean): void {
-    this.access = allowed
-    this.camView?.setAccess(allowed)
-  }
-
-  /** На странице камеры сейчас виден прямой эфир — по нему включается дыхание. */
-  get viewingCamera(): boolean {
-    return this.page === 'cam'
   }
 
   draw(ctx: CanvasRenderingContext2D, r: Rect): void {
@@ -138,7 +113,6 @@ export class Browser implements App {
     y += CHROME.personal
 
     const page: Rect = { x: r.x, y, w: r.w, h: r.y + r.h - CHROME.status - y }
-    this.pageRect = page
     fill(ctx, page, '#ffffff')
     ctx.save()
     ctx.beginPath()
@@ -153,12 +127,6 @@ export class Browser implements App {
         break
       case 'cams':
         this.drawCams(ctx, page)
-        break
-      case 'cam':
-        this.drawCam(ctx, page)
-        break
-      case 'map':
-        this.drawMap(ctx, page)
         break
       case 'journal':
         this.drawJournal(ctx, page)
@@ -194,17 +162,12 @@ export class Browser implements App {
     })
   }
 
-  /** Анимация загрузки, камеры и карты. */
+  /** Анимация загрузки страниц. */
   tick(): boolean {
-    let changed = false
-    if (this.loading > 0) {
-      this.t += 0.016
-      this.loading = Math.max(0, this.loading - 0.016)
-      changed = true
-    }
-    if (this.page === 'cam' && this.camView?.tick?.()) changed = true
-    if (this.page === 'map' && this.mapView?.tick?.()) changed = true
-    return changed
+    if (this.loading <= 0) return false
+    this.t += 0.016
+    this.loading = Math.max(0, this.loading - 0.016)
+    return true
   }
 
   // ── навигация ────────────────────────────────────────────────────
@@ -228,10 +191,6 @@ export class Browser implements App {
     this.focus = null
     this.selectAll = false
     this.sound.busy()
-    if (this.page === 'cam' && !this.camVisited) {
-      this.camVisited = true
-      this.onFirstCameraView?.()
-    }
   }
 
   private statusFor(page: Page): string {
@@ -268,14 +227,7 @@ export class Browser implements App {
       if (path.startsWith('/help')) return 'help'
       return 'notfound'
     }
-    if (low.startsWith('http://map.local') || low.startsWith('https://map.local')) {
-      const path = low.replace(/^https?:\/\/map\.local/, '').split(/[?#]/)[0]
-      return path === '' || path === '/' || path.startsWith('/map') ? 'map' : 'notfound'
-    }
     if (low.startsWith('http://192.168.0.13') || low.startsWith('https://192.168.0.13')) {
-      const path = low.replace(/^https?:\/\/192\.168\.0\.13/, '').split(/[?#]/)[0]
-      if (path.startsWith('/cam')) return 'cam'
-      if (path.startsWith('/map')) return 'map'
       return 'error'
     }
     if (/^https?:\/\//.test(low)) return 'external'
@@ -941,7 +893,7 @@ export class Browser implements App {
     ctx.fillText('Страница 1 из 1 · Следующая ›', x, y)
   }
 
-  /** Служебная страница: список камер блока и правила работы с ними. */
+  /** Служебная страница: камеры теперь живут в отдельной программе. */
   private drawCams(ctx: CanvasRenderingContext2D, p: Rect): void {
     const x = p.x + 20
     let y = p.y + 26
@@ -955,62 +907,40 @@ export class Browser implements App {
     ctx.fillText('узел INTRANET-LOCAL · служба безопасности · доступ: оператор', x, y)
     y += 16
     this.rule(ctx, x, y, p.w - 40)
-    y += 20
+    y += 22
 
-    this.serif(ctx, 12)
-    const cams: Array<[string, string, string]> = [
-      ['КАМ-04', 'комната 4 · общий вид', 'ОНЛАЙН'],
-    ]
-    for (const [name, place, status] of cams) {
-      this.link(ctx, name, x, y, () => this.navigate(CAM_URL), 12)
-      this.serif(ctx, 12)
-      ctx.fillStyle = '#5c5c54'
-      ctx.fillText(place, x + 64, y)
-      ctx.fillStyle = status === 'ОНЛАЙН' ? '#2c7a2c' : '#8a5a12'
-      ctx.fillText('· ' + status, x + 260, y)
-      y += 18
+    this.serif(ctx, 13)
+    ctx.fillStyle = '#23231c'
+    for (const line of [
+      'Просмотр камер вынесен в терминал TDS.',
+      'Программу присылает служба безопасности: сохраните вложение',
+      'из письма, дождитесь установки и запустите ярлык tds.exe.',
+      'Карта блока и все камеры — внутри терминала.',
+    ]) {
+      for (const part of wrap(ctx, line, p.w - 60, 13)) {
+        ctx.fillText(part, x, y)
+        y += 17
+      }
+      y += 2
     }
 
     y += 10
     this.rule(ctx, x, y, p.w - 40)
     y += 20
-
     this.serif(ctx, 12)
-    ctx.fillStyle = '#23231c'
-    for (const line of [
-      'В блоке C одна камера — КАМ-04, комната 4.',
-      'Карта комплекса: http://map.local/map — открывается в Netscape.',
-      'Щёлкните по камере на карте — её адрес скопируется в буфер обмена.',
-      'Вставьте адрес в строку браузера, чтобы увидеть картинку.',
-    ]) {
-      for (const part of wrap(ctx, line, p.w - 60, 12)) {
-        ctx.fillText(part, x, y)
-        y += 16
-      }
-      y += 3
+    ctx.fillStyle = '#5c5c54'
+    for (const line of wrap(
+      ctx,
+      'Веб-обозреватель картинку с камер не показывает — это ограничение узла.',
+      p.w - 60,
+      12,
+    )) {
+      ctx.fillText(line, x, y)
+      y += 16
     }
 
-    y += 8
+    y += 12
     this.link(ctx, '← На главную', x, y, () => this.go('home'))
-  }
-
-  private drawCam(ctx: CanvasRenderingContext2D, p: Rect): void {
-    if (!this.camView) {
-      this.camView = new Camera(this.sound)
-      this.camView.setAccess(this.access)
-    }
-    this.camView.draw(ctx, p)
-  }
-
-  private drawMap(ctx: CanvasRenderingContext2D, p: Rect): void {
-    if (!this.mapView) {
-      this.mapView = new MapApp()
-      this.mapView.onCopy = () => {
-        this.status = 'ссылка скопирована в буфер обмена'
-        this.sound.click()
-      }
-    }
-    this.mapView.draw(ctx, p)
   }
 
   private drawError(ctx: CanvasRenderingContext2D, p: Rect): void {
@@ -1235,11 +1165,11 @@ export class Browser implements App {
     y += 22
 
     const tips = [
-      'Адресная строка принимает адреса вида http://map.local/map',
+      'Адресная строка принимает обычные адреса вида intranet.local/help',
       'Enter — перейти, Esc — снять фокус, Ctrl+V — вставить ссылку.',
-      'На карте щёлкните по камере — её адрес скопируется в буфер.',
-      'Вставьте скопированный адрес в строку — откроется камера.',
       'Кнопки «Назад» и «Вперёд» ходят по истории переходов.',
+      'Картинку с камер показывает только программа TDS (tds.exe).',
+      'Служебные страницы узла доступны без пароля.',
     ]
     for (const tip of tips) {
       this.serif(ctx, 12)
@@ -1254,17 +1184,23 @@ export class Browser implements App {
     y += 8
     this.rule(ctx, x, y, p.w - 40)
     y += 18
-    this.serif(ctx, 13, true)
+    this.serif(ctx, 12, true)
     ctx.fillStyle = '#23231c'
-    ctx.fillText('КАРТА КОМПЛЕКСА', x, y)
-    y += 18
-    this.link(ctx, MAP_URL, x, y, () => this.navigate(MAP_URL), 12)
+    ctx.fillText('ТЕРМИНАЛ НАБЛЮДЕНИЯ', x, y)
     y += 18
     this.serif(ctx, 11)
     ctx.fillStyle = '#5c5c54'
-    ctx.fillText('базовый адрес из domains.txt · камеры копируются с карты', x, y)
+    for (const line of wrap(
+      ctx,
+      'Устанавливается из письма службы безопасности. Ярлык tds.exe появится на рабочем столе.',
+      p.w - 60,
+      11,
+    )) {
+      ctx.fillText(line, x, y)
+      y += 15
+    }
 
-    y += 22
+    y += 18
     this.link(ctx, '← На главную', x, y, () => this.go('home'))
   }
 
@@ -1360,11 +1296,6 @@ export class Browser implements App {
         this.hits[i].fn()
         return
       }
-    }
-    const page = this.pageRect
-    if (page && inside(page, x, y)) {
-      if (this.page === 'cam') this.camView?.click(x, y, page)
-      else if (this.page === 'map') this.mapView?.click(x, y, page)
     }
   }
 }

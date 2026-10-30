@@ -385,6 +385,68 @@ function camera(p: Pix): void {
   p.rect(22, 8, 2, 2, rgba('#d4402e'))
 }
 
+/** Вирус-тыква: оранжевая тыква с зелёными шипами и злой ухмылкой. */
+function virus(p: Pix): void {
+  const body = rgba('#dd7a1e')
+  const bodyLo = rgba('#a8540e')
+  const bodyHi = rgba('#f2a04a')
+  const green = rgba('#5f9e3c')
+  const greenHi = rgba('#7fbf55')
+  const dark = rgba('#231106')
+
+  // вирусные шипы с шариками
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * Math.PI * 2 + 0.2
+    const x0 = Math.round(16 + Math.cos(a) * 10)
+    const y0 = Math.round(17 + Math.sin(a) * 9)
+    const x1 = Math.round(16 + Math.cos(a) * 15)
+    const y1 = Math.round(17 + Math.sin(a) * 14)
+    p.line(x0, y0, x1, y1, green)
+    p.ellipse(x1, y1, 1, 1, greenHi)
+  }
+
+  p.ellipse(16, 17, 11, 10, body)
+  p.ellipse(12, 12, 3, 2, bodyHi)
+  for (const x of [11, 16, 21]) p.line(x, 9, x, 25, bodyLo)
+
+  // черенок
+  p.rect(14, 3, 4, 4, green)
+  p.rect(14, 3, 4, 1, greenHi)
+  p.rect(17, 2, 2, 2, green)
+
+  // злые глаза
+  p.poly(
+    [
+      [10, 12],
+      [14, 13],
+      [11, 17],
+    ],
+    dark,
+  )
+  p.poly(
+    [
+      [22, 12],
+      [18, 13],
+      [21, 17],
+    ],
+    dark,
+  )
+
+  // ухмылка
+  const zig: Array<[number, number]> = [
+    [9, 21],
+    [12, 23],
+    [14, 20],
+    [16, 23],
+    [18, 20],
+    [20, 23],
+    [23, 21],
+  ]
+  for (let i = 0; i + 1 < zig.length; i++) {
+    p.line(zig[i][0], zig[i][1], zig[i + 1][0], zig[i + 1][1], dark)
+  }
+}
+
 const ICONS: Record<string, (p: Pix) => void> = {
   mail,
   browser: globe,
@@ -394,6 +456,7 @@ const ICONS: Record<string, (p: Pix) => void> = {
   file,
   camera,
   map,
+  virus,
 }
 
 /** Карта: сложенный лист с планом блока и красной меткой. */

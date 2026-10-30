@@ -7,7 +7,7 @@ import { Explorer } from './apps/explorer'
 import { Mail } from './apps/mail'
 import { Note } from './apps/note'
 import { Notepad } from './apps/notepad'
-import { DOMAINS_TEXT } from './domains'
+import { Tds } from './apps/tds'
 import type { Sound } from '../audio'
 
 export const DESKTOP_W = 960
@@ -24,8 +24,8 @@ const ICON_H = 92
 const LAUNCH_MS: Record<string, number> = {
   browser: 1500,
   mail: 1100,
+  tds: 900,
   notepad: 650,
-  domains: 650,
   computer: 550,
   trash: 450,
 }
@@ -58,11 +58,14 @@ type DeskIcon = {
 const SIZES: Record<string, Rect> = {
   browser: { x: 120, y: 52, w: 640, h: 486 },
   mail: { x: 250, y: 100, w: 620, h: 476 },
+  tds: { x: 120, y: 52, w: 720, h: 560 },
   notepad: { x: 190, y: 84, w: 540, h: 420 },
-  domains: { x: 210, y: 96, w: 520, h: 390 },
   computer: { x: 280, y: 110, w: 580, h: 400 },
   trash: { x: 300, y: 190, w: 350, h: 180 },
 }
+
+/** Терминал открывается развёрнутым: карта должна занимать весь экран. */
+const MAX_ON_OPEN = new Set(['tds'])
 
 const START_ICONS: Array<Omit<DeskIcon, 'x' | 'y'>> = [
   { id: 'mail', label: 'Почта', glyph: 'mail', app: 'mail' },
@@ -103,6 +106,18 @@ type Band = {
   base: Set<string>
 }
 
+/**
+ * Установка tds.exe: сначала вирус-тыква на весь экран, потом он медленно
+ * тает, и только затем идёт обычный индикатор установки.
+ */
+type Install = {
+  start: number
+  /** Конец показа вируса и конец его растворения. */
+  holdEnd: number
+  fadeEnd: number
+  end: number
+}
+
 function clamp(v: number, lo: number, hi: number): number {
   return v < lo ? lo : v > hi ? hi : v
 }
@@ -134,8 +149,8 @@ export class Desktop {
   /** Второй щелчок по ярлыку: откроем на отпускании, если не начали тащить. */
   private clickOpen: { app: string } | null = null
 
-  // загрузка файла из письма и доступ к камере
-  private install: { start: number; end: number } | null = null
+  // установка tds.exe из письма и доступ к камере
+  private install: Install | null = null
   private threatSent = false
   private cameraAccess = false
 
@@ -165,6 +180,7 @@ export class Desktop {
       x: 10,
       y: 8 + i * 94,
     }))
+    ;(window as unknown as { __desk?: Desktop }).__desk = this
     // Через пять секунд после входа игрок должен понять, что от него хотят.
     window.setTimeout(() => this.notifyMail(), 5000)
   }
@@ -180,12 +196,14 @@ export class Desktop {
       this.spawn(key)
     }
 
-    if (this.install && now >= this.install.end) {
-      this.install = null
-      this.dropPayload()
-      this.toast = { end: now + 10000, kind: 'file' }
-      this.sound.message()
+    if (this.install) {
       this.dirty = true
+      if (now >= this.install.end) {
+        this.install = null
+        this.dropPayload()
+        this.toast = { end: now + 10000, kind: 'file' }
+        this.sound.message()
+      }
     }
 
     if (this.toast && now >= this.toast.end) {
@@ -198,9 +216,9 @@ export class Desktop {
       if (win.min) continue
       if (win.app.tick?.()) this.dirty = true
     }
-    // Дыхание слышно только пока в браузере открыта страница камеры.
+    // Дыхание слышно только пока в TDS открыт прямой эфир камеры.
     const cameraOpen = this.windows.some(
-      (w) => !w.min && w.app instanceof Browser && w.app.viewingCamera,
+      (w) => !w.min && w.app instanceof Tds && w.app.viewingCamera,
     )
     if (!cameraOpen) this.sound.setBreathing(null)
     // Звуки комнаты с камеры идут своей тихой шиной, пока страница открыта.
@@ -287,15 +305,15 @@ export class Desktop {
   // ── окна ─────────────────────────────────────────────────────────
 
   private makeApp(key: string): App {
-    if (key === 'browser') {
-      const browser = new Browser(this.sound)
-      browser.setAccess(this.cameraAccess)
-      browser.onFirstCameraView = () => this.triggerThreat()
-      return browser
-    }
+    if (key === 'browser') return new Browser(this.sound)
     if (key === 'mail') return this.getMail()
+    if (key === 'tds') {
+      const tds = new Tds(this.sound)
+      tds.setAccess(this.cameraAccess)
+      tds.onFirstView = () => this.triggerThreat()
+      return tds
+    }
     if (key === 'notepad') return new Notepad()
-    if (key === 'domains') return new Notepad('domains.txt', DOMAINS_TEXT)
     if (key === 'computer') return new Explorer(this.sound)
     return new Note('Корзина', ['Корзина пуста.', '', 'Здесь ничего нет. Пока.'])
   }
@@ -340,17 +358,18 @@ export class Desktop {
       this.cache.set(key, app)
     }
     const s = SIZES[key] ?? { x: 260, y: 160, w: 340, h: 200 }
+    const max = MAX_ON_OPEN.has(key)
     this.windows.push({
       key,
       app,
-      x: s.x,
-      y: s.y,
-      w: s.w,
-      h: s.h,
+      x: max ? 0 : s.x,
+      y: max ? 0 : s.y,
+      w: max ? DESKTOP_W : s.w,
+      h: max ? DESKTOP_H - TASKBAR : s.h,
       z: ++this.zTop,
       min: false,
-      max: false,
-      restore: null,
+      max,
+      restore: max ? { ...s } : null,
     })
     this.dirty = true
     this.sound.open()
@@ -358,6 +377,7 @@ export class Desktop {
 
   private close(win: Win): void {
     this.windows = this.windows.filter((w) => w !== win)
+    if (win.app instanceof Tds) win.app.reset()
     this.dirty = true
     this.sound.close()
   }
@@ -548,11 +568,16 @@ export class Desktop {
 
   // ── файл из письма ───────────────────────────────────────────────
 
-  /** Вложение скачано — «сохраняем» его с прогрессом, как настоящую загрузку. */
+  /**
+   * Вложение скачано. Вместо честной установки на экран лезет вирус-тыква:
+   * он держится, медленно растворяется, и только потом начинается установка.
+   */
   private beginInstall(): void {
-    if (this.install || this.icons.some((i) => i.id === 'domains')) return
+    if (this.install || this.icons.some((i) => i.id === 'tds')) return
     const now = performance.now()
-    this.install = { start: now, end: now + 2200 }
+    const holdEnd = now + 1400
+    const fadeEnd = holdEnd + 1800
+    this.install = { start: now, holdEnd, fadeEnd, end: fadeEnd + 2200 }
     this.sound.busy()
     this.dirty = true
   }
@@ -574,15 +599,15 @@ export class Desktop {
     return { x: 10, y: 8 }
   }
 
-  /** На рабочий стол кладётся один файл — domains.txt с двумя адресами. */
+  /** После установки на стол ложится один ярлык — tds.exe. */
   private dropPayload(): void {
-    if (this.icons.some((i) => i.id === 'domains')) return
+    if (this.icons.some((i) => i.id === 'tds')) return
     const cell = this.firstFreeCell()
     this.icons.push({
-      id: 'domains',
-      label: 'domains.txt',
-      glyph: 'file',
-      app: 'domains',
+      id: 'tds',
+      label: 'tds.exe',
+      glyph: 'virus',
+      app: 'tds',
       x: cell.x,
       y: cell.y,
     })
@@ -590,9 +615,15 @@ export class Desktop {
 
   private drawInstall(): void {
     if (!this.install) return
-    const ctx = this.ctx
     const now = performance.now()
-    const p = clamp((now - this.install.start) / (this.install.end - this.install.start), 0, 1)
+    if (now < this.install.fadeEnd) {
+      this.drawVirus(now)
+      return
+    }
+
+    const ctx = this.ctx
+    const span = this.install.end - this.install.fadeEnd
+    const p = clamp((now - this.install.fadeEnd) / span, 0, 1)
 
     const r: Rect = { x: (DESKTOP_W - 380) / 2, y: (DESKTOP_H - TASKBAR - 176) / 2, w: 380, h: 176 }
     panel(ctx, r, true, 2)
@@ -603,13 +634,16 @@ export class Desktop {
     g.addColorStop(1, C.titleOn)
     ctx.fillStyle = g
     ctx.fillRect(bar.x, bar.y, bar.w, bar.h)
-    text(ctx, 'Загрузка файла', bar.x + 5, bar.y + 8.5, { size: 12, bold: true, color: C.titleText })
+    text(ctx, 'Установка TDS', bar.x + 5, bar.y + 8.5, { size: 12, bold: true, color: C.titleText })
 
     const x = r.x + 18
     let y = r.y + 34
-    text(ctx, 'Сохранение domains.txt', x, y, { size: 12, bold: true })
+    text(ctx, 'tds.exe · терминал наблюдения', x, y, { size: 12, bold: true })
     y += 18
-    text(ctx, 'Файл будет помещён на рабочий стол.', x, y, { size: 11, color: C.textDim })
+    text(ctx, 'После установки ярлык появится на рабочем столе.', x, y, {
+      size: 11,
+      color: C.textDim,
+    })
 
     const track: Rect = { x, y: y + 16, w: r.w - 36, h: 20 }
     panel(ctx, track, false, 2)
@@ -627,6 +661,123 @@ export class Desktop {
       color: C.textDim,
       align: 'right',
     })
+  }
+
+  /**
+   * Вирус-тыква во весь экран: оранжевая тыква с вирусными шипами и злой
+   * ухмылкой. Держится, потом медленно тает — игрок понимает, что натворил.
+   */
+  private drawVirus(now: number): void {
+    const inst = this.install!
+    const ctx = this.ctx
+    const fade = now <= inst.holdEnd ? 1 : 1 - (now - inst.holdEnd) / (inst.fadeEnd - inst.holdEnd)
+    const a = clamp(fade, 0, 1)
+    const cx = DESKTOP_W / 2
+    const cy = DESKTOP_H / 2 - 26
+
+    ctx.save()
+    ctx.globalAlpha = a
+
+    fill(ctx, { x: 0, y: 0, w: DESKTOP_W, h: DESKTOP_H }, '#070503')
+    const glow = ctx.createRadialGradient(cx, cy, 40, cx, cy, 330)
+    glow.addColorStop(0, 'rgba(120, 58, 12, 0.55)')
+    glow.addColorStop(0.55, 'rgba(52, 22, 6, 0.35)')
+    glow.addColorStop(1, 'rgba(0, 0, 0, 0)')
+    ctx.fillStyle = glow
+    ctx.fillRect(0, 0, DESKTOP_W, DESKTOP_H)
+
+    const pulse = 1 + Math.sin(now / 260) * 0.015
+    const R = 128 * pulse
+
+    // вирусные шипы с шариками на концах
+    ctx.strokeStyle = '#5f9e3c'
+    ctx.fillStyle = '#4c8830'
+    ctx.lineWidth = 9
+    ctx.lineCap = 'round'
+    for (let i = 0; i < 14; i++) {
+      const ang = (i / 14) * Math.PI * 2 + Math.sin(i * 7) * 0.05
+      const x0 = cx + Math.cos(ang) * (R + 2)
+      const y0 = cy + Math.sin(ang) * (R + 2)
+      const x1 = cx + Math.cos(ang) * (R + 30)
+      const y1 = cy + Math.sin(ang) * (R + 30)
+      ctx.beginPath()
+      ctx.moveTo(x0, y0)
+      ctx.lineTo(x1, y1)
+      ctx.stroke()
+      ctx.beginPath()
+      ctx.arc(x1, y1, 7, 0, Math.PI * 2)
+      ctx.fill()
+    }
+    ctx.lineWidth = 1
+
+    // тыква: тело, рёбра, блик
+    const body = ctx.createRadialGradient(cx - R * 0.35, cy - R * 0.4, R * 0.2, cx, cy, R)
+    body.addColorStop(0, '#f0902c')
+    body.addColorStop(0.6, '#d8721c')
+    body.addColorStop(1, '#8f3f0c')
+    ctx.fillStyle = body
+    ctx.beginPath()
+    ctx.ellipse(cx, cy, R, R * 0.96, 0, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.strokeStyle = 'rgba(90, 34, 6, 0.55)'
+    ctx.lineWidth = 5
+    for (const k of [-0.62, -0.3, 0.3, 0.62]) {
+      ctx.beginPath()
+      ctx.ellipse(cx + R * k * 0.55, cy, R * 0.3, R * 0.93, 0, 0, Math.PI * 2)
+      ctx.stroke()
+    }
+
+    // черенок
+    ctx.fillStyle = '#4f7a2c'
+    ctx.beginPath()
+    ctx.moveTo(cx - 12, cy - R + 6)
+    ctx.lineTo(cx - 4, cy - R - 30)
+    ctx.lineTo(cx + 8, cy - R - 26)
+    ctx.lineTo(cx + 6, cy - R + 8)
+    ctx.closePath()
+    ctx.fill()
+
+    // злые треугольные глаза
+    ctx.fillStyle = '#1c0d04'
+    for (const sx of [-1, 1]) {
+      const ex = cx + sx * R * 0.38
+      ctx.beginPath()
+      ctx.moveTo(ex - 26, cy - 44)
+      ctx.lineTo(ex + 24, cy - 26)
+      ctx.lineTo(ex - 18, cy - 4)
+      ctx.closePath()
+      ctx.fill()
+      ctx.fillStyle = 'rgba(255, 210, 120, 0.85)'
+      ctx.beginPath()
+      ctx.arc(ex + 2, cy - 24, 4, 0, Math.PI * 2)
+      ctx.fill()
+      ctx.fillStyle = '#1c0d04'
+    }
+
+    // ухмылка: зигзаг с зубами
+    ctx.strokeStyle = '#1c0d04'
+    ctx.lineWidth = 8
+    ctx.beginPath()
+    const mouthY = cy + R * 0.34
+    ctx.moveTo(cx - R * 0.5, mouthY)
+    for (let i = 0; i <= 6; i++) {
+      const x = cx - R * 0.5 + (i / 6) * R
+      ctx.lineTo(x, mouthY + (i % 2 === 0 ? 16 : -2))
+    }
+    ctx.stroke()
+    ctx.lineWidth = 1
+
+    // подпись
+    ctx.font = 'bold 22px "Courier New", monospace'
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillStyle = 'rgba(120, 190, 95, 0.9)'
+    ctx.fillText('T D S . E X E', cx, cy + R + 78)
+    ctx.font = '12px "Courier New", monospace'
+    ctx.fillStyle = 'rgba(120, 150, 110, 0.75)'
+    ctx.fillText('не выключайте компьютер', cx, cy + R + 104)
+    ctx.textAlign = 'left'
+    ctx.restore()
   }
 
   // ── панель задач и меню ──────────────────────────────────────────
@@ -820,8 +971,8 @@ export class Desktop {
   /** Игрок прочитал письмо — замок камеры разблокирован. */
   private grantCamera(): void {
     this.cameraAccess = true
-    const browser = this.cache.get('browser')
-    if (browser instanceof Browser) browser.setAccess(true)
+    const tds = this.cache.get('tds')
+    if (tds instanceof Tds) tds.setAccess(true)
     this.dirty = true
   }
 
@@ -859,10 +1010,10 @@ export class Desktop {
     ctx.stroke()
 
     if (this.toast.kind === 'file') {
-      drawIcon(ctx, 'file', r.x + 28, r.y + 44, 1)
-      text(ctx, 'Файл сохранён', r.x + 50, r.y + 32, { size: 12, bold: true })
-      text(ctx, 'На рабочем столе: domains.txt', r.x + 50, r.y + 50, { size: 11, color: C.alert })
-      text(ctx, 'Откройте его в блокноте', r.x + 50, r.y + 68, {
+      drawIcon(ctx, 'virus', r.x + 28, r.y + 44, 1)
+      text(ctx, 'Установлено', r.x + 50, r.y + 32, { size: 12, bold: true })
+      text(ctx, 'На рабочем столе: tds.exe', r.x + 50, r.y + 50, { size: 11, color: C.alert })
+      text(ctx, 'Запустите ярлык терминала', r.x + 50, r.y + 68, {
         size: 10,
         color: C.textDim,
       })
@@ -882,7 +1033,7 @@ export class Desktop {
     ctx.stroke()
 
     text(ctx, 'Входящие: новое сообщение', r.x + 50, r.y + 32, { size: 12, bold: true })
-    text(ctx, 'Вложение: domains.txt', r.x + 50, r.y + 50, { size: 11, color: C.alert })
+    text(ctx, 'Вложение: tds.exe', r.x + 50, r.y + 50, { size: 11, color: C.alert })
     text(ctx, 'Нажмите, чтобы открыть', r.x + 50, r.y + 68, { size: 10, color: C.textDim })
   }
 
@@ -1360,5 +1511,14 @@ export class Desktop {
   /** Идёт «загрузка» программы или установка файла: на экране нужны песочные часы. */
   isBusy(): boolean {
     return this.pending !== null || this.install !== null
+  }
+
+  /** Отладка для tools/: открыть TDS сразу с живым кадром, без письма и вируса. */
+  debugOpenCamera(): void {
+    const app = new Tds(this.sound)
+    app.setAccess(true)
+    this.cache.set('tds', app)
+    this.spawn('tds')
+    app.debugOpen()
   }
 }

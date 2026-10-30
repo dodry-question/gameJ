@@ -76,7 +76,7 @@ const FOLDERS: Array<[Folder, string]> = [
 
 export class Mail implements App {
   title = 'Почта'
-  /** Вложение скачали — рабочий стол сохраняет файл на стол. */
+  /** Вложение скачали — рабочий стол ставит tds.exe. */
   onDownload?: () => void
   /** Прочитано письмо похитителей — доступ к замку камеры открыт. */
   onThreatRead?: () => void
@@ -91,20 +91,20 @@ export class Mail implements App {
     this.sound = sound
   }
 
-  /** Новое письмо с адресом карты приходит по ходу пролога. */
+  /** Новое письмо с установщиком терминала приходит по ходу пролога. */
   deliver(): void {
     this.letters.unshift({
       from: 'Служба безопасности',
-      subject: 'Адрес карты наблюдения',
+      subject: 'Терминал наблюдения TDS',
       date: '03:11',
       body:
         'Оператор,\n\n' +
-        'внутренний узел снова отваливается, поэтому адрес карты — в файле.\n\n' +
-        'Открой domains.txt в блокноте и перенеси адрес в Netscape. На карте ' +
-        'видны камеры блока C. Щёлкни по камере — её адрес скопируется в буфер.\n\n' +
-        'Вставь его в строку браузера и смотри.',
+        'внутренний узел снова отваливается, поэтому камеры смотрим только через TDS.\n\n' +
+        'Сохрани вложение — это установщик терминала. После установки запусти ' +
+        'ярлык tds.exe на рабочем столе: внутри карта блока C и все камеры.\n\n' +
+        'Чтобы войти в камеру, удерживай её на карте две секунды.',
       read: false,
-      attachment: { name: 'domains.txt', size: '1 КБ · текстовый файл', downloaded: false },
+      attachment: { name: 'tds.exe', size: '1,8 МБ · программа', downloaded: false },
     })
     this.folder = 'in'
     this.selected = 0
@@ -281,7 +281,7 @@ export class Mail implements App {
     ctx.stroke()
 
     text(ctx, a.name, box.x + 42, box.y + 30, { size: 12, bold: true, color: C.ink })
-    text(ctx, a.downloaded ? 'загружено · сохранение на рабочий стол' : a.size, box.x + 42, box.y + 43, {
+    text(ctx, a.downloaded ? 'загружено · идёт установка' : a.size, box.x + 42, box.y + 43, {
       size: 10,
       color: C.textDim,
     })

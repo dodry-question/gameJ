@@ -1,28 +1,36 @@
 /**
- * «КАМ-04» — окно камеры наблюдения.
+ * Экран камеры 04 внутри терминала TDS.
  *
- * Показывает запись с камеры в комнате, где заперта девушка. Кнопка «открыть
- * дверь» заблокирована, пока игрок не прочитает письмо: замок управляется
- * только изнутри системы.
+ * Картинка не появляется мгновенно: сначала сверху вниз проявляется мутный
+ * кадр, потом он очищается — как медленный поток по узкому каналу. Кнопки
+ * замка оживают только после полной загрузки. Сцену камеры двигает TDS,
+ * сам экран её не обновляет.
  */
 import { fill, inside, panel, setFont, text } from '../draw'
 import type { Rect } from '../draw'
-import type { App } from '../app'
 import type { Sound } from '../../audio'
 import { getCctv } from '../../cctv'
 import type { Cctv } from '../../cctv'
 
 type Phase = 'locked' | 'ready' | 'untied' | 'open'
-
 type Hit = { r: Rect; fn: () => void }
 
-export class Camera implements App {
-  title = 'КАМ-04 · камера'
+/** Сколько идёт «приём» картинки. */
+const REVEAL_MS = 2600
+const FEED_W = 320
+const FEED_H = 240
+
+function clamp(v: number, lo: number, hi: number): number {
+  return v < lo ? lo : v > hi ? hi : v
+}
+
+export class CameraFeed {
   private hits: Hit[] = []
   private sound: Sound
   private cctv: Cctv | null = null
   private phase: Phase = 'locked'
   private t = 0
+  private startedAt = 0
   private released = 0
   private debugGirl = false
   private debugDoor = false
@@ -41,6 +49,31 @@ export class Camera implements App {
 
   get releasedGirl(): boolean {
     return this.phase === 'open'
+  }
+
+  /** Начать приём картинки заново. */
+  start(): void {
+    this.startedAt = performance.now()
+    this.released = 0
+  }
+
+  /** Отладочный вход: картинка уже принята. */
+  startNow(): void {
+    this.startedAt = performance.now() - REVEAL_MS
+  }
+
+  stop(): void {
+    this.startedAt = 0
+    this.sound.setBreathing(null)
+  }
+
+  private get reveal(): number {
+    if (!this.startedAt) return 0
+    return clamp((performance.now() - this.startedAt) / REVEAL_MS, 0, 1)
+  }
+
+  get ready(): boolean {
+    return this.reveal >= 1
   }
 
   private makeNoise(): HTMLCanvasElement {
@@ -62,23 +95,26 @@ export class Camera implements App {
     return c
   }
 
-  tick(): boolean {
-    if (!this.cctv) return false
+  /**
+   * active — экран камеры сейчас виден. Дыхание звучит только на нём, а
+   * сценарий выпуска продолжает идти, даже если игрок ушёл на карту.
+   */
+  tick(active: boolean): boolean {
+    const cctv = this.cctv ?? (this.cctv = getCctv())
     this.t += 0.016
-    this.cctv.update()
 
     // Отладка: ?girl — девушку отвязывают сразу, ?door — сразу открывают дверь.
-    if (this.cctv.loaded) {
+    if (cctv.loaded) {
       if (!this.debugGirl && location.search.includes('girl')) {
         this.debugGirl = true
         this.phase = 'untied'
-        this.cctv.untie()
+        cctv.untie()
       }
       if (!this.debugDoor && location.search.includes('door')) {
         this.debugDoor = true
         this.phase = 'open'
         this.released = 0
-        this.cctv.release()
+        cctv.release()
       }
     }
 
@@ -86,15 +122,13 @@ export class Camera implements App {
       this.released += 0.016
       // исчезает не на пороге, а когда уйдёт в глубь коридора и растворится
       // в темноте; 9 с — страховка, если она почему-то застряла
-      const pos = this.cctv.girlPos
-      if ((pos !== null && pos.z < -6.9) || this.released > 9) this.cctv.setState('gone')
+      const pos = cctv.girlPos
+      if ((pos !== null && pos.z < -6.9) || this.released > 9) cctv.setState('gone')
     }
 
-    // дыхание девушки: слышно, пока камера открыта, и чем больше стресс, тем чаще
-    const audible = this.phase !== 'open' && this.cctv.loaded && !this.cctv.gone
-    this.sound.setBreathing(audible ? this.cctv.stress : null)
-
-    // сценарий девушки (привязана → бродит → стучит) ведёт сам Cctv
+    // дыхание девушки: слышно, пока виден кадр, и чем больше стресс, тем чаще
+    const audible = active && this.ready && this.phase !== 'open' && cctv.loaded && !cctv.gone
+    this.sound.setBreathing(audible ? cctv.stress : null)
     return true
   }
 
@@ -102,7 +136,8 @@ export class Camera implements App {
     this.hits = []
     fill(ctx, r, '#1b1d1f')
 
-    if (!this.cctv) this.cctv = getCctv()
+    const cctv = this.cctv ?? (this.cctv = getCctv())
+    const ready = this.ready
 
     // ── рамка записи ────────────────────────────────────────────────
     const head: Rect = { x: r.x + 8, y: r.y + 6, w: r.w - 16, h: 18 }
@@ -123,14 +158,21 @@ export class Camera implements App {
     }
 
     fill(ctx, feed, '#000000')
-    if (this.cctv.loaded) {
+    if (!ready) {
+      this.loading(ctx, feed)
+    } else if (cctv.loaded) {
       ctx.save()
       ctx.imageSmoothingEnabled = false
-      ctx.drawImage(this.cctv.canvas, feed.x, feed.y, feed.w, feed.h)
+      ctx.drawImage(cctv.canvas, feed.x, feed.y, feed.w, feed.h)
       ctx.restore()
       this.overlay(ctx, feed)
     } else {
-      this.noSignal(ctx, feed)
+      text(ctx, 'НЕТ СИГНАЛА', feed.x + feed.w / 2, feed.y + feed.h / 2, {
+        size: 14,
+        bold: true,
+        color: '#8f948d',
+        align: 'center',
+      })
     }
 
     ctx.strokeStyle = '#3c4044'
@@ -144,17 +186,29 @@ export class Camera implements App {
     ctx.fillStyle = '#c9ccc6'
     ctx.fillText('· КОМНАТА 4, БЛОК C', head.x + 62, head.y + head.h / 2)
 
-    if (Math.floor(this.t * 2) % 2 === 0) {
+    if (ready && Math.floor(this.t * 2) % 2 === 0) {
       ctx.fillStyle = '#c0392b'
       ctx.beginPath()
       ctx.arc(head.x + head.w - 46, head.y + head.h / 2, 4, 0, Math.PI * 2)
       ctx.fill()
     }
     ctx.fillStyle = '#c9ccc6'
-    ctx.fillText('ЗАПИСЬ', head.x + head.w - 38, head.y + head.h / 2)
+    ctx.textAlign = 'right'
+    ctx.fillText(ready ? 'ЗАПИСЬ' : 'КАНАЛ', head.x + head.w - 2, head.y + head.h / 2)
+    ctx.textAlign = 'left'
 
-    // ── нижняя полоса: одна команда за раз — сначала отвязать, потом дверь ──
-    const btn: Rect = { x: r.x + r.w - 214, y: r.y + r.h - 40, w: 202, h: 30 }
+    // ── нижняя полоса ───────────────────────────────────────────────
+    if (!ready) {
+      const pct = Math.round(this.reveal * 100)
+      text(ctx, `приём картинки · ${pct}%`, r.x + 10, r.y + r.h - 22, {
+        size: 11,
+        color: '#8f948d',
+      })
+      return
+    }
+
+    // кнопка слева: уведомление почты в правом нижнем углу не перекрывает её
+    const btn: Rect = { x: r.x + 10, y: r.y + r.h - 40, w: 202, h: 30 }
     const enabled = this.phase === 'ready' || this.phase === 'untied'
     panel(ctx, btn, enabled, 2)
     setFont(ctx, 13, true)
@@ -170,6 +224,12 @@ export class Camera implements App {
             : 'ДВЕРЬ ОТКРЫТА'
     ctx.fillText(label, btn.x + btn.w / 2, btn.y + btn.h / 2)
     ctx.textAlign = 'left'
+
+    text(ctx, 'пульт: клавиша 04 · поток 12 к/с', r.x + r.w - 10, r.y + r.h - 22, {
+      size: 11,
+      color: '#6f746d',
+      align: 'right',
+    })
 
     if (this.phase === 'ready') {
       this.hits.push({
@@ -191,6 +251,63 @@ export class Camera implements App {
         },
       })
     }
+  }
+
+  /** Проявление кадра сверху вниз: мутные полосы, шум и счётчик. */
+  private loading(ctx: CanvasRenderingContext2D, f: Rect): void {
+    const p = this.reveal
+    const cctv = this.cctv
+
+    if (cctv?.loaded) {
+      const shownH = Math.max(2, Math.round(f.h * (0.12 + 0.88 * p)))
+      ctx.save()
+      ctx.beginPath()
+      ctx.rect(f.x, f.y, f.w, shownH)
+      ctx.clip()
+      ctx.globalAlpha = 0.25 + 0.75 * p
+      const blur = (1 - p) * 6
+      ctx.imageSmoothingEnabled = false
+      ctx.filter = blur > 0.4 ? `blur(${blur.toFixed(1)}px)` : 'none'
+      ctx.drawImage(cctv.canvas, 0, 0, FEED_W, FEED_H, f.x, f.y, f.w, f.h)
+      ctx.filter = 'none'
+
+      // редкие сдвинутые полосы помех, пока кадр не собрался
+      ctx.globalCompositeOperation = 'lighter'
+      ctx.globalAlpha = (1 - p) * 0.35
+      for (let i = 0; i < 3; i++) {
+        const sy = f.y + ((this.t * 97 + i * 137) % Math.max(1, shownH))
+        const sh = 4 + (i % 2) * 6
+        const dx = ((i * 7 + Math.floor(this.t * 9)) % 9) - 4
+        ctx.drawImage(this.noise, f.x + dx, sy, f.w, sh, f.x, sy, f.w, sh)
+      }
+      ctx.globalCompositeOperation = 'source-over'
+      ctx.restore()
+    }
+
+    // шум и затемнение не принятой части
+    ctx.save()
+    ctx.beginPath()
+    ctx.rect(f.x, f.y, f.w, f.h)
+    ctx.clip()
+    ctx.globalAlpha = 0.35
+    ctx.drawImage(this.noise, f.x, f.y, f.w, f.h)
+    ctx.globalAlpha = 1
+    const done = 0.12 + 0.88 * p
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.86)'
+    ctx.fillRect(f.x, f.y + f.h * done, f.w, f.h * (1 - done))
+
+    setFont(ctx, 12, true)
+    ctx.fillStyle = 'rgba(200, 240, 210, 0.85)'
+    ctx.textAlign = 'center'
+    ctx.fillText('ПРИЁМ СИГНАЛА', f.x + f.w / 2, f.y + f.h * 0.46)
+    setFont(ctx, 10)
+    ctx.fillText(`канал 04 · ${Math.round(p * 100)}%`, f.x + f.w / 2, f.y + f.h * 0.46 + 18)
+    ctx.textAlign = 'left'
+
+    const bar: Rect = { x: f.x + f.w * 0.25, y: f.y + f.h * 0.46 + 34, w: f.w * 0.5, h: 4 }
+    fill(ctx, bar, 'rgba(120, 160, 130, 0.25)')
+    fill(ctx, { ...bar, w: Math.round(bar.w * p) }, 'rgba(160, 220, 170, 0.85)')
+    ctx.restore()
   }
 
   /** Наложение записи: зелёный тон, строки развёртки, шум и время. */
@@ -247,16 +364,8 @@ export class Camera implements App {
     ctx.restore()
   }
 
-  private noSignal(ctx: CanvasRenderingContext2D, f: Rect): void {
-    text(ctx, 'НЕТ СИГНАЛА', f.x + f.w / 2, f.y + f.h / 2, {
-      size: 14,
-      bold: true,
-      color: '#8f948d',
-      align: 'center',
-    })
-  }
-
   click(x: number, y: number, _r: Rect): void {
+    if (!this.ready) return
     for (let i = this.hits.length - 1; i >= 0; i--) {
       if (inside(this.hits[i].r, x, y)) {
         this.hits[i].fn()

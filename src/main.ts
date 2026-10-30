@@ -33,10 +33,12 @@ window.addEventListener('paste', (e) => {
 })
 
 // Отладочный режим: посмотреть рабочий стол без 3D → ?ui
+// ?ui&cam — сразу открыть TDS на живом кадре (для tools/)
 if (location.search.includes('ui')) {
   desktop.canvas.style.width = '960px'
   desktop.canvas.style.height = '720px'
   host.appendChild(desktop.canvas)
+  if (location.search.includes('cam')) desktop.debugOpenCamera()
   desktop.draw()
 
   const uiPoint = (e: PointerEvent): { x: number; y: number } => {
