@@ -9,6 +9,9 @@ import * as THREE from 'three'
 export type Room4 = {
   /** Дверь на петле: вращается при открытии. */
   doorPivot: THREE.Group
+  /** Полоса света из-под двери: гаснет, когда дверь открыта. */
+  gapGlow: THREE.Mesh
+  gapLight: THREE.PointLight
   /** Пыль в луче лампы: медленно плывёт. */
   dust: THREE.Points
 }
@@ -530,7 +533,7 @@ export function buildRoom(scene: THREE.Scene, chairX: number, chairZ: number, ch
   // ── полоса света из-под двери: в коридоре кто-то оставил свет ───────
   const gapGlow = new THREE.Mesh(
     new THREE.PlaneGeometry(1.16, 0.05),
-    new THREE.MeshBasicMaterial({ color: 0x76856f }),
+    new THREE.MeshBasicMaterial({ color: 0x76856f, transparent: true }),
   )
   gapGlow.rotation.x = -Math.PI / 2
   gapGlow.position.set(0, 0.012, -2.83)
@@ -613,5 +616,5 @@ export function buildRoom(scene: THREE.Scene, chairX: number, chairZ: number, ch
   )
   scene.add(dust)
 
-  return { doorPivot, dust }
+  return { doorPivot, gapGlow, gapLight, dust }
 }

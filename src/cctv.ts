@@ -94,6 +94,8 @@ export class Cctv {
   /** Цепочки предков без самого корня модели — чтобы не собирать их каждый кадр. */
   private chains = new Map<string, THREE.Object3D[]>()
   private doorPivot: THREE.Group
+  private gapGlow: THREE.Mesh
+  private gapLight: THREE.PointLight
   private dust: THREE.Points
   private lamp: THREE.PointLight
   /** Кольца верёвки на запястьях: вяжутся к рукам, пока девушка привязана. */
@@ -182,6 +184,8 @@ export class Cctv {
 
     const room = buildRoom(this.scene, CHAIR.x, CHAIR.z, CHAIR_YAW)
     this.doorPivot = room.doorPivot
+    this.gapGlow = room.gapGlow
+    this.gapLight = room.gapLight
     this.dust = room.dust
     this.loadGirl()
 
@@ -411,6 +415,9 @@ export class Cctv {
       this.doorOpen = Math.min(1, this.doorOpen + dt * 1.6)
       this.doorPivot.rotation.y = -this.doorOpen * 1.5
     }
+    // полоса света из-под двери гаснет вместе с открытием
+    this.gapLight.intensity = 3.4 * (1 - this.doorOpen)
+    ;(this.gapGlow.material as THREE.MeshBasicMaterial).opacity = 1 - this.doorOpen
 
     this.renderer.render(this.scene, this.camera)
   }
