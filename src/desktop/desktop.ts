@@ -12,7 +12,7 @@ import { Note } from './apps/note'
 import { Notepad } from './apps/notepad'
 import { Tds } from './apps/tds'
 import type { Sound } from '../audio'
-import { getCctv } from '../cctv'
+import { getCctv, WALK_S } from '../cctv'
 
 export const DESKTOP_W = 960
 export const DESKTOP_H = 720
@@ -209,6 +209,7 @@ export class Desktop {
   private cinePhase: 'none' | 'plaque' | 'shutdown' | 'black' = 'none'
   private cineAt = 0
   private offPlayed = false
+  private breathStarted = false
 
   private drag: { win: Win; ox: number; oy: number } | null = null
   /** Протяжка внутри окна: выделение текста в блокноте. */
@@ -284,26 +285,30 @@ export class Desktop {
       this.dirty = true
     }
 
-    // Кино провала: плашка → выключение ПК → темнота с дыханием.
+    // Кино провала: плашка → выключение ПК (без текстового экрана) → темнота.
     if (this.cinePhase === 'plaque' && now - this.cineAt >= 5000) {
       this.cinePhase = 'shutdown'
       this.cineAt = now
       this.girlDead = true // с этого момента клик перезапускает смену
       this.sound.unmute()
-      this.sound.shutdownChime()
+      this.sound.playShutdown()
       this.dirty = true
     }
     if (this.cinePhase === 'shutdown') {
       this.dirty = true
       const t = (now - this.cineAt) / 1000
-      if (t >= 1.7 && !this.offPlayed) {
+      if (t >= 0.45 && !this.offPlayed) {
         this.offPlayed = true
         this.sound.monitorOff()
       }
-      if (t >= 2.2) {
+      if (t >= 0.8 && !this.breathStarted) {
+        // L-склейка: дыхание начинается чуть раньше полной темноты
+        this.breathStarted = true
+        this.sound.playDreadBreath(26000)
+      }
+      if (t >= 1.4) {
         this.cinePhase = 'black'
         this.cineAt = now
-        this.sound.playDreadBreath(26000)
         this.dirty = true
       }
     }
@@ -405,40 +410,28 @@ export class Desktop {
     }
 
     if (this.cinePhase === 'shutdown') {
-      fill(ctx, full, '#000000')
+      // текстового экрана «можно отключить» больше нет: плашка, вспышка,
+      // сжимающаяся линия ЭЛТ — и сразу темнота
       const t = (now - this.cineAt) / 1000
-      if (t < 0.3) {
-        // CRT-схлопывание: изображение сжимается в яркую линию и точку
-        const p = t / 0.3
-        const lineH = Math.max(2, Math.round(DESKTOP_H * (1 - p)))
+      fill(ctx, full, '#020202')
+      if (t < 0.25) {
+        text(ctx, 'Это на твоей совести', DESKTOP_W / 2, DESKTOP_H / 2 - 12, {
+          size: 30,
+          bold: true,
+          color: '#c8c4b8',
+          align: 'center',
+        })
+      } else if (t < 0.6) {
+        // CRT-схлопывание: яркая линия сжимается в точку и гаснет
+        const p = (t - 0.25) / 0.35
+        const w = Math.max(4, Math.round(DESKTOP_W * (1 - p)))
+        const h = Math.max(2, Math.round(14 * (1 - p)) + 1)
         fill(
           ctx,
-          { x: 0, y: Math.round((DESKTOP_H - lineH) / 2), w: DESKTOP_W, h: lineH },
-          '#d8d8d0',
+          { x: Math.round((DESKTOP_W - w) / 2), y: DESKTOP_H / 2 - Math.round(h / 2), w, h },
+          '#e8e8e0',
         )
-        if (p > 0.7) {
-          const w = Math.round(DESKTOP_W * (1 - (p - 0.7) / 0.3))
-          fill(
-            ctx,
-            { x: Math.round((DESKTOP_W - w) / 2), y: DESKTOP_H / 2 - 1, w, h: 2 },
-            '#f0f0e8',
-          )
-        }
-        return
       }
-      // классический экран «питание можно отключить»
-      text(ctx, 'Теперь питание компьютера', DESKTOP_W / 2, DESKTOP_H / 2 - 22, {
-        size: 20,
-        bold: true,
-        color: '#d8963c',
-        align: 'center',
-      })
-      text(ctx, 'можно отключить.', DESKTOP_W / 2, DESKTOP_H / 2 + 6, {
-        size: 20,
-        bold: true,
-        color: '#d8963c',
-        align: 'center',
-      })
       return
     }
 
@@ -1368,8 +1361,8 @@ export class Desktop {
   private pairsLost(): void {
     this.pairsLostFlag = true
     this.cinematic = true
-    // мурзик громчает ровно до «за секунду до касания»: 2.2 с плашки + 9 с пути
-    this.sound.playMurzikDread(11200)
+    // мурзик громчает ровно до «за секунду до касания»
+    this.sound.playMurzikDread(2200 + (WALK_S - 1) * 1000)
     window.setTimeout(() => {
       this.throwToCamera()
       getCctv().maniacAttack()

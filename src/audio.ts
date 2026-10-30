@@ -594,6 +594,8 @@ export class Sound {
   private murzikSrc: AudioBufferSourceNode | null = null
   private breathMan: AudioBuffer | null = null
   private breathManLoading = false
+  private shutdownBuf: AudioBuffer | null = null
+  private shutdownLoading = false
   /** Кино провала добралось до тишины: фоновые планировщики больше не звучат. */
   private deadAir = false
 
@@ -669,16 +671,34 @@ export class Sound {
     master.gain.setTargetAtTime(this.level, ctx.currentTime, 0.05)
   }
 
-  /** Характерный звук выключения: нисходящий системный перезвон. */
-  shutdownChime(): void {
-    const seq: Array<[number, number]> = [
-      [784, 0],
-      [659, 0.18],
-      [587, 0.36],
-      [523, 0.54],
-      [392, 0.8],
-    ]
-    for (const [freq, at] of seq) this.bell(freq, 0.55, 0.05, 0.9, at)
+  /** Настоящий звук выключения Windows (public/sounds/shutdown.wav). */
+  playShutdown(): void {
+    const ctx = this.ctx
+    const out = this.master
+    if (!ctx || !out) return
+    if (!this.shutdownBuf) {
+      if (this.shutdownLoading) return
+      this.shutdownLoading = true
+      fetch('sounds/shutdown.wav')
+        .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error('нет файла'))))
+        .then((b) => ctx.decodeAudioData(b))
+        .then((buf) => {
+          this.shutdownBuf = buf
+          this.shutdownLoading = false
+          this.playShutdown()
+        })
+        .catch(() => {
+          this.shutdownLoading = false
+        })
+      return
+    }
+    const src = ctx.createBufferSource()
+    src.buffer = this.shutdownBuf
+    src.loop = false
+    const g = ctx.createGain()
+    g.gain.value = 0.9
+    src.connect(g).connect(out)
+    src.start()
   }
 
   /** Тяжёлый щелчок питания: монитор гаснет. */

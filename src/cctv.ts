@@ -26,7 +26,7 @@ export const W = 320
 export const H = 240
 
 /** Кино провала: сколько секунд маньяк идёт от проёма до девушки. */
-const WALK_S = 10
+export const WALK_S = 6.5
 
 /**
  * Поза: имя кости → углы поворота от позы покоя в осях комнаты:
@@ -189,6 +189,8 @@ export class Cctv {
   private attackT = -1
   /** Какие фазы кино провала уже отправлены рабочему столу. */
   private attackPhase = { near: false, touch: false }
+  /** Она сейчас пятится спиной вперёд — цикл шага играет задом наперёд. */
+  private backpedal = false
   /** Провал случился, пока она ещё не дошла до кухни. */
   private maniacPending = false
   private raycaster = new THREE.Raycaster()
@@ -828,11 +830,18 @@ export class Cctv {
       return
     }
 
-    // Нападение: она застыла лицом к маньяку и дрожит весь его путь.
+    // Нападение: пятится спиной вперёд (цикл шага реверс), потом застыла
+    // лицом к маньяку и дрожит. Спину не ломаем: наклоны минимальные.
     if (this.attackT >= 0) {
       const p: Pose = { ...STAND }
-      this.add(p, 'Spine', -0.18, 0, 0)
-      this.add(p, 'LeftArm', -0.45, 0, 0.55)
+      this.moveBlend += ((this.backpedal ? 1 : 0) - this.moveBlend) * Math.min(1, dt * 6)
+      if (this.backpedal) {
+        this.walkPose(p, t) // фаза намотана назад — шагает задом наперёд
+        this.add(p, 'Spine', -0.06, 0, 0) // чуть отклоняется от него
+      } else {
+        this.add(p, 'Spine', -0.12, 0, 0)
+        this.add(p, 'LeftArm', -0.45, 0, 0.55)
+      }
       this.tremor(p, t, 1)
       this.applyPose(p)
       return
@@ -1268,6 +1277,7 @@ export class Cctv {
     this.task = null
     this.attackT = 0
     this.attackPhase = { near: false, touch: false }
+    this.backpedal = false
     this.kitchen.maniac.visible = true
     this.kitchen.maniac.position.set(0, 0, KITCHEN.z1 - 0.3)
   }
@@ -1434,10 +1444,10 @@ export class Cctv {
   }
 
   /**
-   * Сцена нападения — кино, а не рывок: маньяк неспеша идёт из проёма к
-   * девушке весь WALK_S секунд, музыка нарастает на рабочем столе. За
-   * секунду до касания — фаза 'near' (тишина и плашка), в WALK_S — 'touch':
-   * сам касания не показываем, кадр застывает в моменте.
+   * Сцена нападения — кино, а не рывок: маньяк идёт из проёма к девушке весь
+   * WALK_S секунд, она пятится спиной вперёд, пока есть куда, потом застывает
+   * и дрожит. За секунду до касания — фаза 'near' (тишина и плашка), в
+   * WALK_S — 'touch': сам касания не показываем, кадр застывает в моменте.
    */
   private kitchenAttack(dt: number): void {
     if (this.attackT < 0) return
@@ -1445,19 +1455,59 @@ export class Cctv {
     this.attackT += dt
     const m = this.kitchen.maniac
     const t = this.attackT
-    // неспешный шаг из проёма к ней
+    // куда ему идти: к её текущему месту (она пятится — он догоняет)
     const walk = Math.min(1, t / WALK_S)
     const tx = g.position.x
     const tz = g.position.z + 0.4
     m.position.x = (tx - 0) * walk
     m.position.z = KITCHEN.z1 - 0.3 + (tz - (KITCHEN.z1 - 0.3)) * walk
-    m.rotation.y = Math.atan2(tx - m.position.x, tz - m.position.z)
     // тяжёлая походка: корпус качается и притопывает
-    m.rotation.x = 0.09 + Math.sin(t * 4.6) * 0.05
-    m.position.y = Math.abs(Math.sin(t * 4.6)) * 0.035
-    // она разворачивается к нему
-    this.yaw = this.yawTarget = Math.atan2(m.position.x - g.position.x, m.position.z - g.position.z)
+    m.rotation.x = 0.09 + Math.sin(t * 5.6) * 0.05
+    m.position.y = Math.abs(Math.sin(t * 5.6)) * 0.035
+
+    const dx = tx - m.position.x
+    const dz = tz - m.position.z
+    const dist = Math.hypot(dx, dz)
+    // в упор вектор к цели почти нулевой и atan2 дрожит от кадра к кадру:
+    // у обоих взгляд замирает заранее, иначе корпуса крутит волчком
+    if (dist > 0.35) m.rotation.y = Math.atan2(dx, dz)
+
+    // она пятится спиной вперёд, пытаясь держать от него метр, пока есть
+    // куда (мебель и стены отрежут отход); в последней трети пути — застыла
+    this.backpedal = false
+    const bx = g.position.x - m.position.x
+    const bz = g.position.z - m.position.z
+    const bd = Math.hypot(bx, bz) || 1
+    const keep = 0.9
+    if (t < WALK_S * 0.62 && bd < keep) {
+      const step = Math.min(0.55 * dt, keep - bd)
+      if (step > 0) {
+        const safe = this.avoidChair(g.position.x + (bx / bd) * step, g.position.z + (bz / bd) * step)
+        const moved = Math.hypot(safe.x - g.position.x, safe.z - g.position.z)
+        if (moved > 0.0005) {
+          this.backpedal = true
+          g.position.x = safe.x
+          g.position.z = safe.z
+          this.phase -= moved * 4.6 // цикл шага задом наперёд: ноги идут назад
+        }
+      }
+    }
+    this.prev.set(g.position.x, 0, g.position.z)
+
+    // она смотрит на него, доворачивая плавно; в упор взгляд замирает
+    if (dist > 0.6) {
+      const target = Math.atan2(m.position.x - g.position.x, m.position.z - g.position.z)
+      let d = (target - this.yaw) % (Math.PI * 2)
+      if (d > Math.PI) d -= Math.PI * 2
+      if (d < -Math.PI) d += Math.PI * 2
+      this.yaw += clamp(d, -1.6 * dt, 1.6 * dt)
+    }
+    this.yawDelta = 0 // вторичное скручивание корпуса на время кино выключено
     g.rotation.y = this.yaw
+    // цели нет: walkPose не должен тянуть её взгляд к старому поручению
+    this.targetX = g.position.x
+    this.targetZ = g.position.z
+
     if (!this.attackPhase.near && t >= WALK_S - 1) {
       this.attackPhase.near = true
       this.onAttackPhase?.('near')
