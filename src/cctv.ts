@@ -74,7 +74,12 @@ const CHAIR = { x: -0.6, z: -0.9 }
 const CHAIR_YAW = 0.15
 const SIT_Y = -0.42
 /** Насколько вперёд из стула она выходит, пока встаёт: иначе ноги проходят сквозь сиденье. */
-const RISE_STEP = 0.46
+const RISE_STEP = 0.56
+/** Радиус, внутри которого стул считается препятствием: обходит, а не проходит. */
+const CHAIR_R = 0.5
+/** Куда она убегает: по коридору, наискось, оставаясь в конусе камеры. */
+const CORRIDOR_X = -0.85
+const CORRIDOR_Z = -7.2
 
 const clamp = (v: number, a: number, b: number): number => Math.min(b, Math.max(a, v))
 
@@ -297,17 +302,18 @@ export class Cctv {
       this.targetZ = -2.35
       this.yawTarget = Math.PI
     } else if (state === 'run') {
-      // дверь открыта — бежит по коридору, пока не скроется в темноте
-      this.targetX = 0
-      this.targetZ = -8.4
-      this.yawTarget = Math.PI
+      // дверь открыта — уходит в глубь коридора по диагонали, чтобы её было
+      // видно в проёме, пока она не скроется в темноте
+      this.targetX = CORRIDOR_X
+      this.targetZ = CORRIDOR_Z
+      this.yawTarget = Math.atan2(CORRIDOR_X - this.girl!.position.x, CORRIDOR_Z - this.girl!.position.z)
     } else if (state === 'pace') {
       // бродит перед стулом, не задевая его
       this.targetZ = -1.5
       this.yawTarget = Math.PI / 2
     } else if (state === 'idle') {
-      this.targetX = CHAIR.x
-      this.targetZ = -1.4
+      this.targetX = this.girl!.position.x
+      this.targetZ = this.girl!.position.z
     }
   }
 
@@ -464,6 +470,16 @@ export class Cctv {
     return Math.atan2(Cctv.CAM.pos[0] - g.position.x, Cctv.CAM.pos[2] - g.position.z)
   }
 
+  /** Не пускает её сквозь стул: выталкивает точку из круга вокруг сиденья. */
+  private avoidChair(x: number, z: number): { x: number; z: number } {
+    const dx = x - CHAIR.x
+    const dz = z - CHAIR.z
+    const d = Math.hypot(dx, dz)
+    if (d >= CHAIR_R || d < 1e-5) return { x, z }
+    const k = CHAIR_R / d
+    return { x: CHAIR.x + dx * k, z: CHAIR.z + dz * k }
+  }
+
   /** Игрок дал команду отвязать: она встаёт и начинает пытаться уйти. */
   untie(): void {
     if (this.state === 'tied') {
@@ -539,6 +555,9 @@ export class Cctv {
     }
     g.position.x += vx
     g.position.z += vz
+    const safe = this.avoidChair(g.position.x, g.position.z)
+    g.position.x = safe.x
+    g.position.z = safe.z
     // шаги совпадают с пройденным путём, а не с временем
     const moved = Math.hypot(g.position.x - this.prev.x, g.position.z - this.prev.z)
     this.phase += moved * 4.6
@@ -686,16 +705,16 @@ export class Cctv {
     const g = this.girl!
 
     if (this.state === 'pace') {
-      // бродит по комнате; путь слегка неровный, не по линейке
-      this.targetX = Math.sin(t * 0.45) * 1.05 + this.wob(t * 0.5, 5) * 0.18
-      this.targetZ = -1.55 + this.wob(t * 0.23, 3) * 0.16
-      // направление меняем только когда цель заметно в стороне: у крайней
-      // точки иначе корпус дёргается туда-сюда каждый кадр
-      const dx = this.targetX - g.position.x
-      if (Math.abs(dx) > 0.2) this.yawTarget = dx > 0 ? Math.PI / 2 : -Math.PI / 2
-    } else if (this.state === 'run') {
-      this.yawTarget = Math.PI
+      // ходит туда-сюда перед стулом; путь слегка неровный, не по линейке
+      this.targetX = -0.25 + Math.sin(t * 0.42) * 0.62 + this.wob(t * 0.5, 5) * 0.05
+      this.targetZ = -0.35 + Math.sin(t * 0.27 + 1.2) * 0.1
     }
+
+    // Поворот — по направлению реального движения: и в брожении, и в беге.
+    // Так корпус всегда разворачивается туда, куда она идёт, а не по осям.
+    const dx = this.targetX - g.position.x
+    const dz = this.targetZ - g.position.z
+    if (Math.hypot(dx, dz) > 0.16) this.yawTarget = Math.atan2(dx, dz)
 
     // насколько корпус ещё не довернулся к движению: в развороте шаг мельче,
     // вес переносится, голова ведёт поворот
@@ -827,14 +846,20 @@ export class Cctv {
 
     // ── живые жесты ──────────────────────────────────────────────────
     if (gst?.kind === 'wave') {
-      // поднимает правую руку за полсекунды, машет и опускает
+      // Рука идёт вперёд, к камере: плечо поднято и чуть повёрнуто к объективу,
+      // предплечье согнуто, ладонь развёрнута в камеру, кисть качается.
       const up = smooth(clamp(gp / 0.22, 0, 1))
-      const down = 1 - smooth(clamp((gp - 0.78) / 0.22, 0, 1))
+      const down = 1 - smooth(clamp((gp - 0.76) / 0.22, 0, 1))
       const raise = up * down
-      const wave = Math.sin((t - gst.start) * 9) * raise
-      base.RightArm = [this.wob(t, 6) * 0.03 - 0.12 * raise, 0, -0.08 - 1.12 * raise]
-      base.RightForeArm = [-0.18 + 0.28 * raise, 0, -1.4 * raise]
-      base.RightHand = [0, 0, wave * 0.5]
+      const idle = 1 - raise
+      const shake = Math.sin((t - gst.start) * 9) * raise
+      base.RightArm = [this.wob(t, 6) * 0.04 * idle, 0.6 * raise, -0.08 - 1.03 * raise]
+      base.RightForeArm = [
+        (-0.18 + this.wob(t * 0.7, 8) * 0.08) * idle,
+        -0.8 * raise + shake * 0.1,
+        -1.4 * raise,
+      ]
+      base.RightHand = [0, 0, shake * 0.5]
       base.Head = [base.Head[0] - 0.08 * raise, this.gaze.y, 0.06 * raise]
       base.Spine = [base.Spine[0], base.Spine[1] + 0.05 * raise, base.Spine[2]]
       this.yawTarget = this.faceCameraYaw()
@@ -861,21 +886,18 @@ export class Cctv {
       base.Spine = [base.Spine[0] + 0.04 * sh, base.Spine[1], base.Spine[2]]
     }
 
-    // Жест держит её на месте; иначе — просто стоит недалеко от стула.
-    if (gst) {
-      this.targetX = this.girl!.position.x
-      this.targetZ = this.girl!.position.z
-    } else {
-      this.targetX = CHAIR.x + Math.sin(t * 0.25) * 0.25
-      this.targetZ = -1.55
-      // лицом к двери
-      this.yawTarget = Math.PI
-    }
+    // Жест держит её на месте; иначе — просто стоит там, где остановилась,
+    // и смотрит к двери (не «подъезжает» к стулу сквозь него).
+    this.targetX = this.girl!.position.x
+    this.targetZ = this.girl!.position.z
+    if (!gst) this.yawTarget = Math.PI
   }
 
   /** Дверь открывается — девушка убегает. */
   release(): void {
     if (this.doorOpen === 0) this.doorOpen = 0.0001
+    // жест мог держать её на месте — иначе она зависнет на пороге
+    this.gesture = null
     this.setState('run')
   }
 }

@@ -84,7 +84,10 @@ export class Camera implements App {
 
     if (this.phase === 'open') {
       this.released += 0.016
-      if (this.released > 4.5) this.cctv.setState('gone')
+      // исчезает не на пороге, а когда уйдёт в глубь коридора и растворится
+      // в темноте; 9 с — страховка, если она почему-то застряла
+      const pos = this.cctv.girlPos
+      if ((pos !== null && pos.z < -6.9) || this.released > 9) this.cctv.setState('gone')
     }
 
     // дыхание девушки: слышно, пока камера открыта, и чем больше стресс, тем чаще
