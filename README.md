@@ -71,7 +71,7 @@ src/cctv.ts               — 3D-сцена камеры: комната, дев
 src/desktop/apps/note.ts  — заглушка окна
 public/favicon.svg
 public/sounds/        — эмбиент, dial-up модем, дыхание героини и скрип пола
-public/images/        — 208013669.jpg, пасхалка в «Изображениях»
+public/images/        — dodry.jpg, avizero.jpg, Иларион.jpg: пасхалки в «Изображениях»
 docs/                 — нетехнические заметки по джему (частично устарели)
 tools/shot.mjs        — скриншот-тест в Edge (только для разработки)
 ```

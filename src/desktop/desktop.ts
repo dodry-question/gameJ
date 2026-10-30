@@ -182,6 +182,8 @@ export class Desktop {
   private unlockNoteSent = false
   private doorUnlocked = false
   private pendingNote: { name: string; text: string } | null = null
+  /** Какой файл открыть в окне просмотра при следующем spawn('image'). */
+  private pendingImage: string | null = null
 
   private drag: { win: Win; ox: number; oy: number } | null = null
   /** Протяжка внутри окна: выделение текста в блокноте. */
@@ -352,7 +354,7 @@ export class Desktop {
     if (key === 'computer') {
       return new Explorer(this.sound, () => this.explorerFiles(), (file) => this.openDeskFile(file))
     }
-    if (key === 'image') return new ImageViewer('208013669.jpg', 'images/208013669.jpg')
+    if (key === 'image') return new ImageViewer('dodry.jpg')
     return new Note('Корзина', ['Корзина пуста.', '', 'Здесь ничего нет. Пока.'])
   }
 
@@ -398,6 +400,10 @@ export class Desktop {
     if (key === 'notepad' && this.pendingNote && app instanceof Notepad) {
       app.setContent(this.pendingNote.name, this.pendingNote.text)
       this.pendingNote = null
+    }
+    if (key === 'image' && this.pendingImage && app instanceof ImageViewer) {
+      app.show(this.pendingImage)
+      this.pendingImage = null
     }
     const s = SIZES[key] ?? { x: 260, y: 160, w: 340, h: 200 }
     const max = MAX_ON_OPEN.has(key)
@@ -1052,13 +1058,19 @@ export class Desktop {
   /** Файл открыт из проводника: текст — в блокнот, картинку — в просмотр. */
   private openDeskFile(file: DeskFile): void {
     if (file.kind === 'txt') this.openNotepadWith(file.name, DOOR_NOTE)
-    else if (file.kind === 'image') this.open('image')
-    else this.open('tds')
+    else if (file.kind === 'image') {
+      this.pendingImage = file.name
+      this.open('image')
+    } else this.open('tds')
   }
 
   /** Содержимое папок «Мой компьютер»: растёт по ходу игры. */
   private explorerFiles(): DeskFile[] {
-    const files: DeskFile[] = [{ folder: 'Изображения', name: '208013669.jpg', kind: 'image' }]
+    const files: DeskFile[] = [
+      { folder: 'Изображения', name: 'dodry.jpg', kind: 'image' },
+      { folder: 'Изображения', name: 'avizero.jpg', kind: 'image' },
+      { folder: 'Изображения', name: 'Иларион.jpg', kind: 'image' },
+    ]
     if (this.icons.some((i) => i.id === 'tds')) {
       files.push({ folder: 'Загрузки', name: 'tds.exe', kind: 'exe' })
     }

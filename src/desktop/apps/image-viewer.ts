@@ -12,17 +12,28 @@ export class ImageViewer implements App {
   private ready = false
   private failed = false
 
-  constructor(fileName: string, src: string) {
+  constructor(fileName: string) {
     this.title = `${fileName} — Просмотр`
-    const img = new Image()
-    img.onload = () => {
+    this.img = new Image()
+    this.img.onload = () => {
       this.ready = true
     }
-    img.onerror = () => {
+    this.img.onerror = () => {
       this.failed = true
     }
-    img.src = src
-    this.img = img
+    this.load(fileName)
+  }
+
+  /** Открыть другой файл в том же окне (клик по картинки в проводнике). */
+  show(fileName: string): void {
+    this.ready = false
+    this.failed = false
+    this.load(fileName)
+  }
+
+  private load(fileName: string): void {
+    this.title = `${fileName} — Просмотр`
+    this.img.src = `images/${encodeURIComponent(fileName)}`
   }
 
   /** Картинка догрузилась — окно надо перерисовать. */

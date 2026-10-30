@@ -159,7 +159,7 @@ await shot('07-lock-won')
 await click(150, 704, 600)
 await shot('08-door-open')
 
-// ── 6. Пасхалка: Изображения → 208013669.jpg ─────────────────────────
+// ── 6. Пасхалки: Изображения → dodry.jpg ─────────────────────────────
 // tds.exe появляется в «Загрузках» после установки: имитируем установку.
 await page.evaluate(() => window.__desk.beginInstall?.())
 await page.waitForTimeout(5800)
@@ -169,7 +169,7 @@ await click(110, 568, 900) // поднять «Мой компьютер» (ос
 await click(377, 145, 300) // Вверх → корень
 await click(618, 225, 400) // папка «Изображения»
 await shot('09-images-folder')
-await click(330, 225, 900) // открыть 208013669.jpg
+await click(330, 225, 900) // открыть dodry.jpg (первая в папке)
 result.windowsAfterImage = await windows()
 await shot('10-image-viewer')
 
