@@ -7,13 +7,4 @@
 export const MAP_URL = 'http://map.local/map'
 export const CAM_URL = 'http://192.168.0.13/cam04'
 
-export const DOMAINS_TEXT =
-  'карта комплекса\n' +
-  'блок C · ноябрь 2000\n' +
-  '\n' +
-  MAP_URL +
-  '\n' +
-  '\n' +
-  'открой адрес в Netscape Navigator.\n' +
-  'на карте щёлкни по камере — её адрес скопируется в буфер обмена.\n' +
-  'вставь адрес камеры в строку браузера.\n'
+export const DOMAINS_TEXT = MAP_URL

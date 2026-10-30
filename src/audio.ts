@@ -14,14 +14,35 @@ export class Sound {
   private modemLoading = false
   private ambient: AudioBuffer | null = null
   private ambientLoading = false
-  private creak: AudioBuffer | null = null
-  private creakLoading = false
   private breath: AudioBuffer | null = null
   private breathLoading = false
   private breathStress: number | null = null
   private breathSrc: AudioBufferSourceNode | null = null
   private breathGain: GainNode | null = null
   private started = false
+  /** Общая громкость игры: 1 — максимум, с которого стартуем. */
+  private level = storedVolume()
+
+  get volume(): number {
+    return this.level
+  }
+
+  /** Общая громкость 0…1: ползунок в панели задач. */
+  setVolume(v: number): void {
+    this.level = Math.min(1, Math.max(0, v))
+    try {
+      localStorage.setItem(VOLUME_KEY, String(this.level))
+    } catch {
+      // приватный режим без localStorage — громкость просто не запомнится
+    }
+    const ctx = this.ctx
+    const master = this.master
+    if (!ctx || !master) return
+    const t = ctx.currentTime
+    master.gain.cancelScheduledValues(t)
+    master.gain.setValueAtTime(master.gain.value, t)
+    master.gain.linearRampToValueAtTime(this.level, t + 0.08)
+  }
 
   /** Вызывать на первом клике: браузеры не дают создать звук раньше. */
   ensure(): void {
@@ -31,7 +52,7 @@ export class Sound {
       const Ctor = window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
       const ctx = new Ctor()
       const master = ctx.createGain()
-      master.gain.value = 0.5
+      master.gain.value = this.level
 
       // сухая шина + немного «комнаты», иначе колокольчики звучат как в вакууме
       const dry = ctx.createGain()
@@ -40,8 +61,18 @@ export class Sound {
       wet.gain.value = 0.16
       const verb = ctx.createConvolver()
       verb.buffer = impulse(ctx)
-      master.connect(dry).connect(ctx.destination)
-      master.connect(verb).connect(wet).connect(ctx.destination)
+
+      // limiter: на полной громкости пики не должны хрипеть
+      const limiter = ctx.createDynamicsCompressor()
+      limiter.threshold.value = -10
+      limiter.knee.value = 8
+      limiter.ratio.value = 12
+      limiter.attack.value = 0.003
+      limiter.release.value = 0.25
+
+      master.connect(dry).connect(limiter)
+      master.connect(verb).connect(wet).connect(limiter)
+      limiter.connect(ctx.destination)
 
       this.ctx = ctx
       this.master = master
@@ -49,8 +80,7 @@ export class Sound {
       this.loadAmbient()
       this.loadModem()
       this.scheduleModem(28 + Math.random() * 26)
-      this.loadCreak()
-      this.scheduleCreak(16 + Math.random() * 18)
+      this.scheduleSteps(18 + Math.random() * 22)
       void ctx.resume()
     } catch {
       this.ctx = null
@@ -340,77 +370,107 @@ export class Sound {
       })
   }
 
-  // ── скрип пола за спиной ─────────────────────────────────────────
+  // ── шаги за спиной ───────────────────────────────────────────────
 
   /**
-   * Скрип деревянного пола сзади оператора: настоящая запись шага по старому
-   * дереву (Freesound, Rudmer_Rotteveel «Wood Creak Single V10», CC0),
-   * играется изредка через HRTF-паннер позади слушателя — в наушниках понятно,
-   * что скрипят за спиной. Громкость средняя: заметно, но без акцента.
+   * Редкие тихие шаги за спиной оператора: синтезированные (шорох подошвы +
+   * глухой удар пятки) через HRTF-паннер. Каждая серия — случайное число шагов,
+   * которые смещаются с одного бока на другой, поэтому звук «ходит» вокруг
+   * головы. Громкость маленькая: не раздражать, а заставлять оборачиваться.
    */
-  private loadCreak(): void {
-    const ctx = this.ctx
-    if (!ctx || this.creak || this.creakLoading) return
-    this.creakLoading = true
-    fetch('sounds/creak.mp3')
-      .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error('нет файла'))))
-      .then((b) => ctx.decodeAudioData(b))
-      .then((buf) => {
-        this.creak = buf
-      })
-      .catch(() => {
-        this.creakLoading = false
-        // без файла просто живём без скрипов
-      })
-  }
-
-  private scheduleCreak(delaySec: number): void {
+  private scheduleSteps(delaySec: number): void {
     window.setTimeout(() => {
-      this.playCreak()
-      this.scheduleCreak(24 + Math.random() * 32)
+      this.walkBehind()
+      this.scheduleSteps(30 + Math.random() * 55)
     }, delaySec * 1000)
   }
 
-  private playCreak(): void {
-    const ctx = this.ctx
-    const out = this.master
-    if (!ctx || !out || !this.creak) return
-    this.playOneCreak()
-    // иногда скрипнет пару раз подряд, как человек, переступающий с ноги на ногу
-    if (Math.random() < 0.45) this.playOneCreak(0.7 + Math.random() * 0.6)
+  private walkBehind(): void {
+    if (!this.ctx || !this.master || !this.noise) return
+    const count = 3 + Math.floor(Math.random() * 6) // 3–8 шагов
+    const side = Math.random() < 0.5 ? -1 : 1
+    let when = 0
+    let x = side * (1.5 + Math.random() * 0.5)
+    let z = 1.9 + Math.random() * 0.9
+    const stride = 2.4 + Math.random() * 0.8
+    for (let i = 0; i < count; i++) {
+      when += 0.5 + Math.random() * 0.16
+      // идёт наискось: звук перетекает от одного уха к другому
+      x -= side * (stride / count) * (0.8 + Math.random() * 0.5)
+      z += (Math.random() - 0.5) * 0.14
+      this.footstep(when, x, z)
+      if (Math.random() < 0.12) when += 0.5 + Math.random() * 0.7 // замер
+    }
   }
 
-  private playOneCreak(when = 0): void {
+  private footstep(when: number, x: number, z: number): void {
     const ctx = this.ctx
     const out = this.master
-    if (!ctx || !out || !this.creak) return
-    const src = ctx.createBufferSource()
-    src.buffer = this.creak
-    src.playbackRate.value = 0.9 + Math.random() * 0.25
+    if (!ctx || !out || !this.noise) return
+    const t = ctx.currentTime + when
+
     const panner = ctx.createPanner()
     panner.panningModel = 'HRTF'
+    panner.distanceModel = 'inverse'
     panner.refDistance = 1
-    panner.rolloffFactor = 0.3
+    panner.rolloffFactor = 0.45
     if (panner.positionX) {
-      panner.positionX.value = 0.5
-      panner.positionY.value = -0.3
-      panner.positionZ.value = 2.2 // сзади: слушатель смотрит в -Z
+      panner.positionX.value = x
+      panner.positionY.value = -0.2
+      panner.positionZ.value = z // сзади: слушатель смотрит в -Z
     } else {
-      panner.setPosition(0.5, -0.3, 2.2)
+      panner.setPosition(x, -0.2, z)
     }
+    panner.connect(out)
+
+    const peak = 0.09 + Math.random() * 0.04
+
+    // шорох подошвы по полу
+    const src = ctx.createBufferSource()
+    src.buffer = this.noise
+    src.playbackRate.value = 0.85 + Math.random() * 0.3
+    const lp = ctx.createBiquadFilter()
+    lp.type = 'lowpass'
+    lp.frequency.value = 420 + Math.random() * 260
     const env = ctx.createGain()
-    const t = ctx.currentTime + when
-    const dur = this.creak.duration / src.playbackRate.value
     env.gain.setValueAtTime(0.0001, t)
-    env.gain.linearRampToValueAtTime(0.4, t + 0.05)
-    env.gain.setValueAtTime(0.4, t + dur - 0.15)
-    env.gain.linearRampToValueAtTime(0.0001, t + dur)
-    src.connect(panner).connect(env).connect(out)
+    env.gain.linearRampToValueAtTime(peak, t + 0.008)
+    env.gain.exponentialRampToValueAtTime(0.0001, t + 0.13)
+    src.connect(lp).connect(env).connect(panner)
     src.start(t)
+    src.stop(t + 0.16)
+
+    // глухой удар пятки — низкий, почти без тона
+    const thump = ctx.createOscillator()
+    thump.type = 'sine'
+    thump.frequency.setValueAtTime(95 + Math.random() * 25, t)
+    thump.frequency.exponentialRampToValueAtTime(46, t + 0.1)
+    const tg = ctx.createGain()
+    tg.gain.setValueAtTime(0.0001, t)
+    tg.gain.linearRampToValueAtTime(peak * 0.8, t + 0.012)
+    tg.gain.exponentialRampToValueAtTime(0.0001, t + 0.14)
+    thump.connect(tg).connect(panner)
+    thump.start(t)
+    thump.stop(t + 0.16)
   }
 }
 
 // ── буферы ─────────────────────────────────────────────────────────
+
+const VOLUME_KEY = 'sound.volume'
+
+/** Громкость из прошлой сессии; по умолчанию — максимум. */
+function storedVolume(): number {
+  try {
+    const raw = localStorage.getItem(VOLUME_KEY)
+    if (raw === null) return 1
+    const v = Number(raw)
+    if (Number.isFinite(v)) return Math.min(1, Math.max(0, v))
+  } catch {
+    // приватный режим без localStorage
+  }
+  return 1
+}
 
 function noiseBuffer(ctx: AudioContext): AudioBuffer {
   const len = Math.floor(ctx.sampleRate * 0.4)

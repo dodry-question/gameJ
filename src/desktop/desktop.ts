@@ -121,6 +121,9 @@ export class Desktop {
   private cache = new Map<string, App>()
   private zTop = 10
   private startOpen = false
+  /** Регулятор громкости в панели задач: открыт ли и тащим ли ползунок. */
+  private volumeOpen = false
+  private volumeDrag = false
 
   // ярлыки
   private icons: DeskIcon[] = []
@@ -244,6 +247,7 @@ export class Desktop {
     if (this.startOpen) this.drawStartMenu()
     if (this.install) this.drawInstall()
     if (this.toast) this.drawToast()
+    if (this.volumeOpen) this.drawVolume()
     this.drawCursor()
     this.scanlines()
   }
@@ -656,12 +660,97 @@ export class Desktop {
       x += 151
     }
 
+    // звук: динамик слева от часов, щелчок открывает ползунок громкости
+    const volume = this.volumeIcon()
+    panel(ctx, volume, !this.volumeOpen, 2)
+    this.drawSpeaker(volume, this.sound.volume)
+
     const clock: Rect = { x: DESKTOP_W - 62, y: top + 3, w: 58, h: 23 }
     panel(ctx, clock, false, 2)
     const now = new Date()
     const hh = String(now.getHours()).padStart(2, '0')
     const mm = String(now.getMinutes()).padStart(2, '0')
     text(ctx, `${hh}:${mm}`, clock.x + clock.w / 2, clock.y + 11, { size: 12, align: 'center' })
+  }
+
+  private volumeIcon(): Rect {
+    return { x: DESKTOP_W - 90, y: DESKTOP_H - TASKBAR + 3, w: 26, h: 23 }
+  }
+
+  private volumePopup(): Rect {
+    return { x: DESKTOP_W - 152, y: DESKTOP_H - TASKBAR - 146, w: 78, h: 138 }
+  }
+
+  /** Желобок ползунка: по нему считается громкость, 1 — сверху. */
+  private volumeTrack(): Rect {
+    const p = this.volumePopup()
+    return { x: p.x + 31, y: p.y + 24, w: 16, h: 84 }
+  }
+
+  private drawVolume(): void {
+    const ctx = this.ctx
+    const p = this.volumePopup()
+    panel(ctx, p, true, 2)
+    text(ctx, 'Звук', p.x + p.w / 2, p.y + 11, { size: 11, bold: true, align: 'center' })
+
+    const tr = this.volumeTrack()
+    panel(ctx, tr, false, 1)
+    fill(ctx, { x: tr.x + 2, y: tr.y + 2, w: tr.w - 4, h: tr.h - 4 }, C.faceHi)
+    // заливка снизу: видно, сколько громкости накручено
+    const level = this.sound.volume
+    const top = tr.y + 2 + (tr.h - 4) * (1 - level)
+    fill(ctx, { x: tr.x + 2, y: top, w: tr.w - 4, h: tr.y + tr.h - 2 - top }, C.titleOn2)
+    ctx.strokeStyle = C.faceLo
+    ctx.lineWidth = 1
+    for (const f of [0.25, 0.5, 0.75]) {
+      const y = Math.round(tr.y + 2 + (tr.h - 4) * f) + 0.5
+      ctx.beginPath()
+      ctx.moveTo(tr.x + 3, y)
+      ctx.lineTo(tr.x + 6, y)
+      ctx.moveTo(tr.x + tr.w - 6, y)
+      ctx.lineTo(tr.x + tr.w - 3, y)
+      ctx.stroke()
+    }
+    // ползунок
+    panel(ctx, { x: tr.x - 1, y: Math.round(top) - 4, w: tr.w + 2, h: 9 }, true, 1)
+    text(ctx, `${Math.round(level * 100)}%`, p.x + p.w / 2, tr.y + tr.h + 14, {
+      size: 11,
+      align: 'center',
+    })
+  }
+
+  /** Динамик: корпус, раструб и волны; на нуле — крестик. */
+  private drawSpeaker(r: Rect, level: number): void {
+    const ctx = this.ctx
+    const cx = r.x + 5
+    const cy = r.y + r.h / 2
+    ctx.fillStyle = C.text
+    ctx.beginPath()
+    ctx.moveTo(cx, cy - 3)
+    ctx.lineTo(cx + 4, cy - 3)
+    ctx.lineTo(cx + 8, cy - 8)
+    ctx.lineTo(cx + 8, cy + 8)
+    ctx.lineTo(cx + 4, cy + 3)
+    ctx.lineTo(cx, cy + 3)
+    ctx.closePath()
+    ctx.fill()
+
+    ctx.strokeStyle = C.text
+    ctx.lineWidth = 1.5
+    const waves = level > 0.55 ? 2 : level > 0.05 ? 1 : 0
+    for (let i = 1; i <= waves; i++) {
+      ctx.beginPath()
+      ctx.arc(cx + 8, cy, 2.5 + i * 3, -0.85, 0.85)
+      ctx.stroke()
+    }
+    if (!waves) {
+      ctx.beginPath()
+      ctx.moveTo(cx + 12, cy - 4)
+      ctx.lineTo(cx + 18, cy + 4)
+      ctx.moveTo(cx + 18, cy - 4)
+      ctx.lineTo(cx + 12, cy + 4)
+      ctx.stroke()
+    }
   }
 
   private menuLayout(): { rect: Rect; items: Array<{ r: Rect; label: string; key?: string }> } {
@@ -900,8 +989,25 @@ export class Desktop {
       this.dirty = true
     }
 
+    if (this.volumeOpen) {
+      const pop = this.volumePopup()
+      if (inside(pop, x, y)) {
+        this.volumeDrag = true
+        this.setVolumeAt(y)
+        return
+      }
+      this.volumeOpen = false
+      this.dirty = true
+    }
+
     if (y >= DESKTOP_H - TASKBAR) {
       this.clearSelection()
+      if (inside(this.volumeIcon(), x, y)) {
+        this.volumeOpen = !this.volumeOpen
+        this.sound.click()
+        this.dirty = true
+        return
+      }
       if (x < 76) {
         this.startOpen = !this.startOpen
         this.dirty = true
@@ -1050,6 +1156,11 @@ export class Desktop {
     this.pointer.y = y
     this.pointer.over = true
 
+    if (this.volumeDrag) {
+      this.setVolumeAt(y)
+      return
+    }
+
     if (this.appDrag) {
       this.appDrag.app.drag?.(x, y, this.contentRect(this.appDrag))
       this.dirty = true
@@ -1097,6 +1208,17 @@ export class Desktop {
     this.dirty = true
   }
 
+  /** Точка клика по ползунку → громкость; за пределами желобка — крайние. */
+  private setVolumeAt(y: number): void {
+    const tr = this.volumeTrack()
+    const v = 1 - (y - (tr.y + 2)) / (tr.h - 4)
+    const next = Math.min(1, Math.max(0, v))
+    if (Math.abs(next - this.sound.volume) > 0.001) {
+      this.sound.setVolume(next)
+      this.dirty = true
+    }
+  }
+
   /** Мышь ушла с экрана монитора — курсор на столе больше не рисуем. */
   pointerOut(): void {
     if (!this.pointer.over) return
@@ -1105,6 +1227,7 @@ export class Desktop {
   }
 
   pointerUp(): void {
+    this.volumeDrag = false
     if (this.appDrag) {
       this.appDrag.app.release?.()
       this.appDrag = null
