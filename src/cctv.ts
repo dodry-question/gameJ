@@ -1353,10 +1353,10 @@ export class Cctv {
         this.kitchen.plate.visible = true
         this.flags.meatCut = true
         this.say('внутри железка... на ней выбит адрес', 3)
-        this.onNoteAppend?.('Железка внутри мяса: выбит адрес pairs.local — это головоломка')
+        this.onNoteAppend?.('Железка внутри мяса: выбит адрес pairs.local — узел перехвата')
       }
       if (at > 2.6) {
-        this.say('пары точка локал. это их архив — записывай!', 4)
+        this.say('пары точка локал. это их узел перехвата — записывай!', 4)
         this.task = null
       }
       return

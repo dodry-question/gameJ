@@ -1,6 +1,8 @@
-// Проверка головоломки-пар и узла печати: гейт до этапа (403) → pairs.local →
-// два этапа (8 попыток, 3 подсматривания) → код без формы печати → print.local
-// → строка пароля → «Печать» → код уходит на принтер кухни.
+// Проверка перехвата потока (pairs.local) и узла печати: гейт после кухни →
+// интро → ловля бит (движение ловца, зелёное окно ±2) → ПАУЗА мышью →
+// клик по зелёному хэшу → код без формы печати → print.local → строка
+// пароля → «Печать» → код уходит на принтер кухни. Плюс провал: пауза
+// вне зелёного окна рвёт поток и будит маньяка.
 //   node tools/check-pairs.mjs [url] [outDir]
 import { chromium } from 'playwright-core'
 import { mkdirSync } from 'node:fs'
@@ -48,75 +50,86 @@ const navigate = async (host) => {
 
 const result = {}
 
-// ── 1. Гейт замка: до письма со камеры узел закрыт ───────────────────
+// ── 1. Гейт: на кухне узел pairs.local открыт ────────────────────────
 await page.waitForFunction(() => window.__cctv?.loaded === true, null, { timeout: 20000 })
 await click(38, 704, 300)
 await click(110, 522, 1500)
-result.gateLockDeniedEarly =
-  (await page.evaluate(() => window.__browser?.canOpenLock?.() ?? null)) === false
-
-// ── 2. Она на кухне — pairs.local открывается ────────────────────────
 await page.waitForFunction(
   () => window.__cctv?.girlState === 'kitchen',
   null,
   { timeout: 30000 },
 )
+result.gatePairsOpen = await page.evaluate(() => window.__browser?.canOpenPairs?.() ?? null)
+
+// ── 2. pairs.local: интро и старт ────────────────────────────────────
 result.page = await navigate('pairs.local')
 result.intro = await pairs()
 await shot('02-intro')
 await page.keyboard.press('Space')
-await page.waitForTimeout(300)
-result.memorize = await pairs()
-await shot('03-memorize')
-await page.evaluate(() => window.__pairs.debugSkipMemorize())
-await page.waitForTimeout(200)
+await page.waitForTimeout(800)
+result.play = await pairs()
+result.bitsInAir = await page.evaluate(() => window.__pairs.debugBits())
+await shot('03-play')
 
-// честный промах и честное совпадение
-const missPair = await page.evaluate(() => {
-  const cards = window.__pairs.debugCards()
-  const a = cards.find((c) => c.state === 'hidden')
-  const b = cards.find((c) => c.state === 'hidden' && c.kind !== a.kind)
-  return { a: { x: a.x, y: a.y }, b: { x: b.x, y: b.y } }
-})
-await click(missPair.a.x, missPair.a.y, 80)
-await click(missPair.b.x, missPair.b.y, 900)
-result.afterMiss = await pairs()
+// ловец ездит: удержание D смещает вправо, A возвращает
+const cxBefore = (await pairs()).catcher
+await page.keyboard.down('d')
+await page.waitForTimeout(350)
+await page.keyboard.up('d')
+const cxAfter = (await pairs()).catcher
+await page.keyboard.down('a')
+await page.waitForTimeout(120)
+await page.keyboard.up('a')
+result.catcherMoved = cxAfter > cxBefore
+result.catcher = { before: cxBefore, after: (await pairs()).catcher }
 
-// подсматривание: карты открываются и закрываются обратно
-const peeksBefore = (await pairs()).peeks
-await page.keyboard.press('KeyP')
-await page.waitForTimeout(300)
-await shot('04-peek')
-await page.waitForTimeout(900)
-const peeksAfter = (await pairs()).peeks
-result.peeksUsed = peeksBefore - peeksAfter
+// ── 3. Зелёное окно: догоняем до нижней границы честными битами ──────
+let st = await pairs()
+const need = Math.max(0, st.window[0] - st.caught)
+await page.evaluate((n) => window.__pairs.debugCatch(n), need)
+st = await pairs()
+result.green = st.green
+result.hashRegen = st.hash !== '···· ···· ···· ····'
+await shot('04-green')
 
-const matchPair = await page.evaluate(() => {
-  const cards = window.__pairs.debugCards()
-  const a = cards.find((c) => c.state === 'hidden')
-  const b = cards.find((c) => c.kind === a.kind && c !== a)
-  return { a: { x: a.x, y: a.y }, b: { x: b.x, y: b.y } }
-})
-await click(matchPair.a.x, matchPair.a.y, 80)
-await click(matchPair.b.x, matchPair.b.y, 300)
-result.afterMatch = await pairs()
-await page.evaluate(() => window.__pairs.debugSolveStage())
-await page.waitForTimeout(1800)
-result.won = await pairs()
+// ── 4. ПАУЗА мышью в углу и клик по зелёному хэшу ────────────────────
+const btns = await page.evaluate(() => window.__pairs.debugButtons())
+await click(btns.pause.x, btns.pause.y, 300)
+result.paused = (await pairs()).state
+await shot('05-paused')
+await click(btns.hash.x, btns.hash.y, 300)
+st = await pairs()
+result.won = st.state
+result.password4 = /^\d{4}$/.test(st.password ?? '')
 result.noPrintFormOnGame = await page.evaluate(
   () => typeof window.__pairs.debugForm !== 'function',
 )
-await shot('05-code')
+await shot('06-code')
 
-// ── 3. print.local: строка пароля и честная «Печать» ─────────────────
+// ── 5. print.local: строка пароля и честная «Печать» ─────────────────
 result.printPage = await navigate('print.local')
-await shot('06-print-site')
+await shot('07-print-site')
 const form = await page.evaluate(() => window.__printsite?.debugForm() ?? null)
 await click(form.input.x, form.input.y, 200)
 await page.keyboard.type((await pairs()).password, { delay: 40 })
 await click(form.print.x, form.print.y, 600)
 result.printedCode = await page.evaluate(() => window.__desk.debugInfo().printedCode)
 await shot('07-printed')
+
+// ── 6. Провал: пауза вне зелёного окна рвёт поток ────────────────────
+await navigate('pairs.local')
+await page.evaluate(() => window.__pairs.reset()) // смена перезапущена — игра с начала
+await page.waitForTimeout(300)
+result.restarted = (await pairs()).state
+await page.keyboard.press('Space')
+await page.waitForTimeout(400)
+await page.evaluate(() => window.__pairs.debugCatch(2)) // меньше окна: хэш не зелёный
+const beforeFail = await pairs()
+result.failNotGreen = beforeFail.green === false
+const failBtns = await page.evaluate(() => window.__pairs.debugButtons())
+await click(failBtns.pause.x, failBtns.pause.y, 600)
+result.failed = (await pairs()).state
+await shot('08-failed')
 
 console.log(JSON.stringify(result, null, 2))
 console.log(errors.length ? `ОШИБКИ:\n${errors.join('\n')}` : 'ошибок в консоли нет')

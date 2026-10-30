@@ -103,13 +103,13 @@ export class Browser implements App {
   private sound: Sound
   /** Мини-игра сброса замка; победа уходит рабочему столу, тот отпирает дверь. */
   private game: LockGame
-  /** Головоломка-пары: печать пароля и провал уходят в рабочий стол. */
+  /** Перехват потока: печать пароля и провал уходят в рабочий стол. */
   private pairs: PairsGame
   /** print.local: строка пароля и кнопка «Печать». */
   private printSite: PrintSite
   /** Вызывается, когда мини-игра сняла блокировку двери. */
   onUnlockDoor?: () => void
-  /** Головоломка-пары проиграна: на кухне просыпается маньяк. */
+  /** Перехват потока провален: на кухне просыпается маньяк. */
   onPairsFail?: () => void
   /** Нажата «Печать»: код с бумажки уходит на принтер в кухне. */
   onPrintCode?: (code: string) => void
@@ -248,7 +248,7 @@ export class Browser implements App {
     if (page === 'notfound') return 'документ не найден'
     if (page === 'external') return 'внешняя сеть'
     if (page === 'lock') return 'панель сброса замка'
-    if (page === 'pairs') return 'архив памяти'
+    if (page === 'pairs') return 'перехват потока'
     if (page === 'print') return 'служба печати'
     if (page === 'denied') return 'доступ запрещён'
     return 'готово'
@@ -1250,7 +1250,7 @@ export class Browser implements App {
     this.game.draw(ctx, { x: p.x, y: p.y + head, w: p.w, h: p.h - head })
   }
 
-  /** Страница pairs.local: головоломка-пары и печать пароля. */
+  /** Страница pairs.local: перехват потока и печать пароля. */
   private drawPairs(ctx: CanvasRenderingContext2D, p: Rect): void {
     fill(ctx, p, '#050d08')
 
@@ -1264,7 +1264,7 @@ export class Browser implements App {
     setFont(ctx, 11, true)
     ctx.fillStyle = '#9fd39f'
     ctx.textBaseline = 'middle'
-    ctx.fillText('АРХИВ ПАМЯТИ · pairs.local', p.x + 12, p.y + head / 2 + 1)
+    ctx.fillText('ПЕРЕХВАТ ПОТОКА · pairs.local', p.x + 12, p.y + head / 2 + 1)
 
     if (this.loading > 0) {
       text(ctx, 'соединение…', p.x + p.w / 2, p.y + head + (p.h - head) / 2, {

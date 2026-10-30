@@ -1,78 +1,74 @@
 /**
- * «pairs.local» — головоломка-пары на память и сайт печати пароля.
+ * «pairs.local» — перехват потока и сайт печати пароля.
  *
- * Игра: два этапа — сетка 9×9 с восемью парами, затем 12×12 с двенадцатью.
- * Карты открываются на несколько секунд — запомни, где что лежит, потом
- * перевери по памяти. На каждый этап 8 попыток (промах = несовпавшая пара)
- * и 3 подсматривания. Попытки кончились — связь обрывается, в кухне
- * начинается худшее. Победа показывает код выхода — печатается он на
- * отдельном узле print.local (класс PrintSite ниже): строка с паролем,
+ * Игра: осу-кэтч на битах. По полю падают чипы 0 и 1, квадрат-ловец ездит
+ * у линии ловли (A/D или стрелки). Нужно поймать случайное число бит
+ * (7–13): с каждым пойманным битом хэш-подпись в углу перегенерируется,
+ * а в зелёном окне (±2 от цели) она подсвечивается. Дальше — не переловить:
+ * успеть нажать мышью кнопку «ПАУЗА» в другом углу и кликнуть по зелёному
+ * хэшу — он выдаст код выхода из 4 цифр. Перелов или пауза вне окна —
+ * подпись не сходится, связь рвётся, в кухне начинается худшее. Код
+ * печатается на узле print.local (класс PrintSite ниже): строка с паролем,
  * кнопка «Печать», бумажку вынесет принтер на кухне.
  *
  * Ничего не знают ни про браузер, ни про кухню: наружу только колбэки.
  */
 import { fill, inside, panel, setFont, text } from '../draw'
 import type { Rect } from '../draw'
-import { drawIcon } from '../icons'
 import type { Sound } from '../../audio'
 
-type Stage = { cols: number; rows: number; pairs: number; showMs: number }
+type State = 'intro' | 'play' | 'paused' | 'won' | 'failed'
+type Bit = { x: number; y: number; v: number; bit: 0 | 1 }
 
-/** Один этап: 12×12 сочли слишком злым — осталась только сетка 9×9. */
-const STAGES: Stage[] = [{ cols: 9, rows: 9, pairs: 8, showMs: 6000 }]
-const ATTEMPTS = 8 // на каждый этап
-const PEEKS = 3 // подсматриваний на каждый этап
-const MISS_MS = 700 // сколько висит несовпавшая пара
-const PEEK_MS = 900 // сколько открыты карты при подсматривании
-const DONE_MS = 1400
+const WINDOW = 2 // зелёное окно подписи: ±2 элемента от цели
+const CATCHER_W = 42
+const CATCHER_H = 26
+const CATCHER_SPEED = 540 // px/с
+const BIT = 20 // размер чипа с битом
+const FALL_MIN = 290 // скорость падения, px/с
+const FALL_MAX = 380
+const SPAWN_MIN = 360 // пауза между битами, мс
+const SPAWN_MAX = 600
+const TOP_H = 22
+const BOTTOM_H = 72
 
-/** Лица карт: процедурные значки игры. На этап берётся случайная выборка. */
-const KINDS = [
-  'virus',
-  'knife',
-  'meat',
-  'lamp',
-  'key',
-  'camera',
-  'map',
-  'folder',
-  'computer',
-  'trash',
-  'mail',
-  'browser',
-] as const
-
-type Card = { kind: string; state: 'hidden' | 'open' | 'matched'; pos: number }
-type State = 'intro' | 'memorize' | 'play' | 'stageDone' | 'won' | 'failed'
+const rand = (a: number, b: number) => a + Math.random() * (b - a)
 
 export class PairsGame {
-  /** Попытки кончились: рабочий стол запускает сцену провала. */
+  /** Поток повреждён: рабочий стол запускает сцену провала. */
   onFail?: () => void
-  /** Оба этапа пройдены: код выхода показан — дверь кухни его запомнит. */
+  /** Подпись принята: код выхода показан — дверь кухни его запомнит. */
   onPassword?: (code: string) => void
 
   private sound: Sound
-  private stage = 0 // индекс в STAGES
   private state: State = 'intro'
-  private cards: Card[] = []
-  private kinds: string[] = []
-  private attempts = ATTEMPTS
-  private peeks = PEEKS
-  private peekUntil = 0
-  private openIdx: number[] = []
-  private missAt = 0
-  private missPair: number[] = []
-  private phaseAt = 0
+  private target = 9 // случайное 7–13: столько бит нужно перехватить
+  private caught = 0
+  private stream = '' // двоичный хвост перехвата для строки состояния
+  private hash = '···· ···· ···· ····'
+  private bits: Bit[] = []
+  private spawnAt = 0
+  private cx = 400 // центр ловца, координаты поля
+  private fw = 800 // размер поля, обновляется из draw
+  private fh = 400
+  private geo: { field: Rect; pause: Rect; hash: Rect } | null = null
+  private held = { left: false, right: false }
+  private greenWas = false
   private password = ''
   private failSent = false
   private startBtn: Rect | null = null
-  private peekBtn: Rect | null = null
-  /** Геометрия последнего кадра — для кликов и отладки. */
-  private geo: { ox: number; oy: number; cell: number } = { ox: 0, oy: 0, cell: 24 }
+  private lastT = 0
 
   constructor(sound: Sound) {
     this.sound = sound
-    this.buildStage(0)
+    this.newSession()
+    // keydown доходит только через браузер (окно активно), а отпускание
+    // ловим на окне всегда — чтобы ловец не залипал при уходе со страницы
+    window.addEventListener('keyup', (e) => this.hold(e.code, false))
+    window.addEventListener('blur', () => {
+      this.held.left = false
+      this.held.right = false
+    })
     ;(window as unknown as { __pairs?: PairsGame }).__pairs = this
   }
 
@@ -81,229 +77,212 @@ export class PairsGame {
   debugState(): object {
     return {
       state: this.state,
-      stage: this.stage + 1,
-      attempts: this.attempts,
-      peeks: this.peeks,
-      matched: this.cards.filter((c) => c.state === 'matched').length / 2,
-      pairs: this.cards.length / 2,
+      caught: this.caught,
+      target: this.target,
+      window: [this.lo, this.hi],
+      green: this.green,
+      catcher: Math.round(this.cx),
+      hash: this.hash,
       password: this.password || null,
     }
   }
 
-  /** Пропустить показ: сразу фаза поиска. */
-  debugSkipMemorize(): void {
-    if (this.state === 'memorize') {
-      this.state = 'play'
-      this.phaseAt = performance.now()
+  /** Начать игру без клика (инструменты проверки). */
+  debugStart(): void {
+    if (this.state === 'intro') this.begin()
+  }
+
+  /** Честно догнать пойманных бит до нужного числа (инструменты проверки). */
+  debugCatch(n = 1): void {
+    for (let i = 0; i < n && this.state === 'play'; i++) {
+      this.doCatch(Math.random() < 0.5 ? 0 : 1)
     }
   }
 
-  /** Мгновенно собрать все пары текущего этапа (инструменты проверки). */
-  debugSolveStage(): void {
-    if (this.state !== 'play') return
-    for (const c of this.cards) c.state = 'matched'
-    this.finishStage()
+  /** Центры кнопки паузы и хэш-панели — инструменты кликают по ним. */
+  debugButtons(): { pause: { x: number; y: number }; hash: { x: number; y: number } } | null {
+    if (!this.geo) return null
+    const { pause, hash } = this.geo
+    return {
+      pause: { x: pause.x + pause.w / 2, y: pause.y + pause.h / 2 },
+      hash: { x: hash.x + hash.w / 2, y: hash.y + hash.h / 2 },
+    }
   }
 
-  /** Карты с пиксельными центрами — инструменты проверки кликают по ним. */
-  debugCards(): Array<{ kind: string; state: string; x: number; y: number }> {
-    const { ox, oy, cell } = this.geo
-    const cols = this.cfg.cols
-    return this.cards.map((c) => ({
-      kind: c.kind,
-      state: c.state,
-      x: ox + (c.pos % cols) * cell + cell / 2,
-      y: oy + Math.floor(c.pos / cols) * cell + cell / 2,
-    }))
+  /** Сколько бит сейчас в воздухе (инструменты проверки). */
+  debugBits(): number {
+    return this.bits.length
   }
 
   /** Рабочий стол перезапустил смену — сайт встаёт на начало. */
   reset(): void {
-    this.stage = 0
-    this.password = ''
-    this.failSent = false
-    this.buildStage(0)
-  }
-
-  // ── сборка этапа ─────────────────────────────────────────────────
-
-  private buildStage(index: number): void {
-    const s = STAGES[index]
-    this.stage = index
-    this.attempts = ATTEMPTS
-    this.peeks = PEEKS
-    this.openIdx = []
-    this.missPair = []
-    this.peekUntil = 0
-    this.state = 'intro'
-    this.phaseAt = 0
-
-    // набор лиц: на этап 1 — 8 случайных из 12, на этап 2 — все
-    const pool = [...KINDS]
-    for (let i = pool.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1))
-      ;[pool[i], pool[j]] = [pool[j], pool[i]]
-    }
-    this.kinds = pool.slice(0, s.pairs)
-
-    const spots: number[] = []
-    for (let i = 0; i < s.cols * s.rows; i++) spots.push(i)
-    for (let i = spots.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1))
-      ;[spots[i], spots[j]] = [spots[j], spots[i]]
-    }
-    const faces = [...this.kinds, ...this.kinds]
-    for (let i = faces.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1))
-      ;[faces[i], faces[j]] = [faces[j], faces[i]]
-    }
-    this.cards = faces.map((kind, i) => ({ kind, state: 'hidden', pos: spots[i] }))
-  }
-
-  private get cfg(): Stage {
-    return STAGES[this.stage]
+    this.newSession()
   }
 
   // ── жизненный цикл ───────────────────────────────────────────────
 
+  private get lo(): number {
+    return this.target - WINDOW
+  }
+
+  private get hi(): number {
+    return this.target + WINDOW
+  }
+
+  private get green(): boolean {
+    return this.caught >= this.lo && this.caught <= this.hi
+  }
+
+  private newSession(): void {
+    this.state = 'intro'
+    this.target = 7 + Math.floor(Math.random() * 7)
+    this.caught = 0
+    this.stream = ''
+    this.hash = '···· ···· ···· ····'
+    this.bits = []
+    this.spawnAt = 0
+    this.cx = this.fw / 2
+    this.held.left = false
+    this.held.right = false
+    this.greenWas = false
+    this.password = ''
+    this.failSent = false
+  }
+
+  private begin(): void {
+    this.state = 'play'
+    this.lastT = performance.now()
+    this.spawnAt = this.lastT + 500
+    this.sound.click()
+  }
+
   tick(): boolean {
     const now = performance.now()
+    const dt = Math.min(0.05, (now - this.lastT) / 1000)
+    this.lastT = now
+    if (this.state !== 'play') return this.state === 'paused' || this.state === 'failed'
 
-    if (this.state === 'memorize' && now - this.phaseAt >= this.cfg.showMs) {
-      this.state = 'play'
-      this.phaseAt = now
-      return true
+    // ловец: A/D и стрелки, движение напрямую без инерции
+    const dir = (this.held.right ? 1 : 0) - (this.held.left ? 1 : 0)
+    if (dir !== 0) {
+      this.cx = Math.max(
+        CATCHER_W / 2,
+        Math.min(this.fw - CATCHER_W / 2, this.cx + dir * CATCHER_SPEED * dt),
+      )
     }
-    // несовпавшая пара закрывается сама
-    if (this.missPair.length > 0 && now - this.missAt >= MISS_MS) {
-      for (const i of this.missPair) {
-        const c = this.cards[i]
-        if (c && c.state === 'open') c.state = 'hidden'
+    // спавн бит
+    if (now >= this.spawnAt) {
+      this.bits.push({
+        x: rand(BIT, this.fw - BIT),
+        y: -BIT,
+        v: rand(FALL_MIN, FALL_MAX),
+        bit: Math.random() < 0.5 ? 0 : 1,
+      })
+      this.spawnAt = now + rand(SPAWN_MIN, SPAWN_MAX)
+    }
+    // падение, ловля и пропуск
+    const top = this.fh - CATCHER_H
+    const keep: Bit[] = []
+    for (const b of this.bits) {
+      b.y += b.v * dt
+      const inLane = Math.abs(b.x - this.cx) <= CATCHER_W / 2 + BIT / 3
+      if (inLane && b.y + BIT / 2 >= top && b.y - BIT / 2 <= this.fh + 4) {
+        this.doCatch(b.bit)
+        if (this.state !== 'play') return true // перелов: поток повреждён
+        continue
       }
-      this.missPair = []
-      this.openIdx = []
-      return true
+      if (b.y - BIT / 2 <= this.fh) keep.push(b)
     }
-    // подсматривание кончилось — карты снова закрыты
-    if (this.peekUntil > 0 && now >= this.peekUntil) {
-      this.peekUntil = 0
-      return true
-    }
-    if (this.state === 'stageDone' && now - this.phaseAt >= DONE_MS) {
-      if (this.stage + 1 < STAGES.length) {
-        this.buildStage(this.stage + 1)
-      } else {
-        this.state = 'won'
-        if (!this.password) {
-          this.password = String(1000 + Math.floor(Math.random() * 9000))
-          this.onPassword?.(this.password)
-        }
-        this.sound.message()
-      }
-      return true
-    }
-    return false
-  }
-
-  key(e: KeyboardEvent): boolean {
-    if (e.code === 'Space' && !e.repeat) {
-      if (this.state === 'intro') {
-        this.state = 'memorize'
-        this.phaseAt = performance.now()
-        this.sound.click()
-        return true
-      }
-      return false
-    }
-    // P — подсмотреть, чтобы и с клавиатуры было удобно
-    if ((e.code === 'KeyP' || e.code === 'KeyЗ') && !e.repeat && this.canPeek()) {
-      this.doPeek()
-      return true
-    }
-    return false
-  }
-
-  private canPeek(): boolean {
-    return (
-      this.state === 'play' &&
-      this.peeks > 0 &&
-      this.peekUntil === 0 &&
-      this.missPair.length === 0
-    )
-  }
-
-  private doPeek(): void {
-    this.peeks--
-    this.peekUntil = performance.now() + PEEK_MS
-    this.sound.message()
-  }
-
-  click(x: number, y: number): boolean {
-    const now = performance.now()
-    if (this.state === 'intro' && this.startBtn && inside(this.startBtn, x, y)) {
-      this.state = 'memorize'
-      this.phaseAt = now
-      this.sound.click()
-      return true
-    }
-    if (this.state === 'play' && this.peekBtn && inside(this.peekBtn, x, y)) {
-      if (this.canPeek()) this.doPeek()
-      else this.sound.deny()
-      return true
-    }
-    if (this.state !== 'play') return false
-    if (this.missPair.length > 0 || this.peekUntil > 0) return false // ждём
-
-    const { ox, oy, cell } = this.geo
-    const col = Math.floor((x - ox) / cell)
-    const row = Math.floor((y - oy) / cell)
-    if (col < 0 || row < 0 || col >= this.cfg.cols || row >= this.cfg.rows) return false
-    const pos = row * this.cfg.cols + col
-    const idx = this.cards.findIndex((c) => c.pos === pos)
-    if (idx < 0) return false // пустая ячейка
-    const card = this.cards[idx]
-    if (card.state !== 'hidden') return false
-
-    card.state = 'open'
-    this.openIdx.push(idx)
-    this.sound.cardFlip()
-
-    if (this.openIdx.length === 2) {
-      const [a, b] = this.openIdx
-      if (this.cards[a].kind === this.cards[b].kind) {
-        this.cards[a].state = 'matched'
-        this.cards[b].state = 'matched'
-        this.openIdx = []
-        this.sound.cardMatch()
-        if (this.cards.every((c) => c.state === 'matched')) this.finishStage()
-      } else {
-        this.attempts--
-        this.missAt = now
-        this.missPair = [a, b]
-        this.sound.cardMiss()
-        if (this.attempts <= 0) {
-          // пара ещё закроется по таймеру, но провал фиксируем сразу
-          this.fail()
-        }
-      }
-      return true
-    }
+    this.bits = keep
     return true
   }
 
-  private finishStage(): void {
-    this.state = 'stageDone'
-    this.phaseAt = performance.now()
-    this.sound.stageClear()
+  private doCatch(bit: 0 | 1): void {
+    this.caught++
+    this.stream = (this.stream + bit).slice(-18)
+    this.regenHash()
+    this.sound.cardFlip()
+    if (this.green && !this.greenWas) {
+      this.greenWas = true
+      this.sound.cardMatch()
+    }
+    if (this.caught > this.hi) this.fail()
+  }
+
+  private regenHash(): void {
+    const g = () =>
+      Math.floor(Math.random() * 65536)
+        .toString(16)
+        .padStart(4, '0')
+    this.hash = `${g()} ${g()} ${g()} ${g()}`
   }
 
   private fail(): void {
     this.state = 'failed'
+    this.held.left = false
+    this.held.right = false
     this.sound.pairsFail()
     if (!this.failSent) {
       this.failSent = true
       this.onFail?.()
     }
+  }
+
+  key(e: KeyboardEvent): boolean {
+    if (this.state === 'intro' && e.code === 'Space' && !e.repeat) {
+      this.begin()
+      return true
+    }
+    if (this.state !== 'play') return false
+    if (e.code === 'Space') return true // не даём прокрутить страницу
+    return this.hold(e.code, true)
+  }
+
+  private hold(code: string, down: boolean): boolean {
+    if (code === 'KeyA' || code === 'ArrowLeft') {
+      this.held.left = down
+      return true
+    }
+    if (code === 'KeyD' || code === 'ArrowRight') {
+      this.held.right = down
+      return true
+    }
+    return false
+  }
+
+  click(x: number, y: number): boolean {
+    if (this.state === 'intro') {
+      if (this.startBtn && inside(this.startBtn, x, y)) {
+        this.begin()
+        return true
+      }
+      return false
+    }
+    if (this.state === 'paused') {
+      const g = this.geo
+      if (g && inside(g.hash, x, y)) {
+        this.state = 'won'
+        this.password = String(1000 + Math.floor(Math.random() * 9000))
+        this.onPassword?.(this.password)
+        this.sound.stageClear()
+        return true
+      }
+      return true // под паузой страница мертва: ждём клик по хэшу
+    }
+    if (this.state !== 'play') return false
+    const g = this.geo
+    if (g && inside(g.pause, x, y)) {
+      if (this.green) {
+        this.state = 'paused'
+        this.held.left = false
+        this.held.right = false
+        this.sound.message()
+      } else {
+        this.fail() // коммит вне окна: подпись не сойдётся
+      }
+      return true
+    }
+    return false
   }
 
   // ── отрисовка ────────────────────────────────────────────────────
@@ -312,181 +291,221 @@ export class PairsGame {
     fill(ctx, r, '#050d08')
     const now = performance.now()
 
-    const hud = 26
-    const pad = 12
-    const gridArea: Rect = {
-      x: r.x + pad,
-      y: r.y + hud + 6,
-      w: r.w - pad * 2,
-      h: r.h - hud * 2 - 16,
+    const field: Rect = {
+      x: r.x + 8,
+      y: r.y + TOP_H + 8,
+      w: r.w - 16,
+      h: r.h - TOP_H - BOTTOM_H - 16,
     }
-    const { cols, rows } = this.cfg
-    const cell = Math.max(8, Math.floor(Math.min(gridArea.w / cols, gridArea.h / rows)) - 2)
-    const ox = gridArea.x + (gridArea.w - cell * cols) / 2
-    const oy = gridArea.y + (gridArea.h - cell * rows) / 2
-    this.geo = { ox, oy, cell }
+    this.fw = field.w
+    this.fh = field.h
+    this.cx = Math.max(CATCHER_W / 2, Math.min(this.fw - CATCHER_W / 2, this.cx))
+    const catcher: Rect = {
+      x: field.x + this.cx - CATCHER_W / 2,
+      y: field.y + field.h - CATCHER_H,
+      w: CATCHER_W,
+      h: CATCHER_H,
+    }
+    const hashPanel: Rect = {
+      x: r.x + 10,
+      y: r.y + r.h - BOTTOM_H + 6,
+      w: Math.min(360, Math.floor(r.w * 0.46)),
+      h: BOTTOM_H - 14,
+    }
+    const pauseBtn: Rect = { x: r.x + r.w - 142, y: hashPanel.y + 10, w: 132, h: 40 }
+    this.geo = { field, pause: pauseBtn, hash: hashPanel }
 
-    this.drawHud(ctx, r, hud, now)
-    if (this.state === 'won') {
-      this.drawWon(ctx, r)
-      return
-    }
-
-    // слоты сетки
-    const slot = Math.max(2, Math.floor(cell / 10))
-    for (let row = 0; row < rows; row++) {
-      for (let col = 0; col < cols; col++) {
-        const x = ox + col * cell
-        const y = oy + row * cell
-        fill(ctx, { x: x + slot, y: y + slot, w: cell - slot * 2, h: cell - slot * 2 }, '#0a1810')
-      }
-    }
-    // карты
-    for (let i = 0; i < this.cards.length; i++) {
-      const card = this.cards[i]
-      const col = card.pos % cols
-      const row = Math.floor(card.pos / cols)
-      this.drawCard(ctx, card, ox + col * cell, oy + row * cell, cell, now, i)
-    }
-
-    // фаза показа: полоса обратного отсчёта под сеткой
-    if (this.state === 'memorize') {
-      const p = Math.min(1, (now - this.phaseAt) / this.cfg.showMs)
-      const bar: Rect = { x: r.x + r.w / 2 - 130, y: r.y + r.h - 14, w: 260, h: 5 }
-      fill(ctx, bar, 'rgba(120, 160, 130, 0.25)')
-      fill(ctx, { ...bar, w: Math.round(bar.w * (1 - p)) }, 'rgba(216, 178, 90, 0.9)')
-      text(ctx, 'ЗАПОМНИВАЙ', r.x + r.w / 2, r.y + r.h - 24, {
-        size: 10,
-        bold: true,
-        color: '#d8b25a',
-        align: 'center',
-      })
-    }
-
-    // кнопка подсматривания
-    if (this.state === 'play') {
-      const btn: Rect = { x: r.x + r.w - 132, y: r.y + r.h - 30, w: 120, h: 22 }
-      const can = this.canPeek()
-      panel(ctx, btn, can, 1)
-      text(ctx, `ПОДСМОТРЕТЬ · ${this.peeks}`, btn.x + btn.w / 2, btn.y + btn.h / 2, {
-        size: 10,
-        bold: true,
-        color: can ? '#16160f' : '#8e8e86',
-        align: 'center',
-      })
-      this.peekBtn = btn
-    } else {
-      this.peekBtn = null
-    }
+    this.drawTop(ctx, r)
+    this.drawField(ctx, field, catcher)
+    this.drawBottom(ctx, r, hashPanel, pauseBtn, now)
 
     if (this.state === 'intro') this.drawIntro(ctx, r)
-    if (this.state === 'stageDone') {
-      text(ctx, 'ЭТАП ПРОЙДЕН', r.x + r.w / 2, r.y + r.h / 2 - 8, {
-        size: 18,
-        bold: true,
-        color: '#9fd39f',
-        align: 'center',
-      })
-    }
+    if (this.state === 'paused') this.drawPaused(ctx, r, now)
+    if (this.state === 'won') this.drawWon(ctx, r)
     if (this.state === 'failed') this.drawFail(ctx, r, now)
   }
 
-  private drawCard(
-    ctx: CanvasRenderingContext2D,
-    card: Card,
-    x: number,
-    y: number,
-    cell: number,
-    now: number,
-    idx: number,
-  ): void {
-    const inset = Math.max(2, Math.floor(cell / 10))
-    const r: Rect = { x: x + inset, y: y + inset, w: cell - inset * 2, h: cell - inset * 2 }
-    // в фазе показа и при подсматривании карты лежат лицом вверх
-    const faceUp =
-      card.state !== 'hidden' || this.state === 'memorize' || performance.now() < this.peekUntil
-    if (!faceUp) {
-      // рубашка: светлая фаска Win2000 с тыквенным водяным знаком
-      panel(ctx, r, true, 1)
-      if (cell >= 18) {
-        ctx.globalAlpha = 0.16
-        drawIcon(ctx, 'virus', r.x + r.w / 2, r.y + r.h / 2, (cell - inset * 2) / 44)
-        ctx.globalAlpha = 1
-      }
-      return
-    }
-    const missed = this.missPair.includes(idx) && now - this.missAt < MISS_MS
-    fill(ctx, r, '#101f16')
-    ctx.strokeStyle = missed ? '#d4402e' : card.state === 'matched' ? '#2c7a2c' : '#4f8f57'
-    ctx.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1)
-    drawIcon(ctx, card.kind, r.x + r.w / 2, r.y + r.h / 2, (cell - inset * 2) / 38)
-  }
-
-  private drawHud(ctx: CanvasRenderingContext2D, r: Rect, hud: number, now: number): void {
-    fill(ctx, { x: r.x, y: r.y, w: r.w, h: hud }, '#08140c')
+  private drawTop(ctx: CanvasRenderingContext2D, r: Rect): void {
+    fill(ctx, { x: r.x, y: r.y, w: r.w, h: TOP_H }, '#08140c')
     ctx.strokeStyle = 'rgba(126, 154, 132, 0.35)'
     ctx.beginPath()
-    ctx.moveTo(r.x, r.y + hud - 0.5)
-    ctx.lineTo(r.x + r.w, r.y + hud - 0.5)
+    ctx.moveTo(r.x, r.y + TOP_H - 0.5)
+    ctx.lineTo(r.x + r.w, r.y + TOP_H - 0.5)
     ctx.stroke()
-    const s = this.cfg
-    const found = this.cards.filter((c) => c.state === 'matched').length / 2
     setFont(ctx, 10, true)
     ctx.fillStyle = '#9fd39f'
     ctx.textBaseline = 'middle'
     ctx.textAlign = 'left'
-    ctx.fillText(`СЕТКА ${s.cols}×${s.rows}`, r.x + 10, r.y + hud / 2)
-    ctx.textAlign = 'center'
-    ctx.fillStyle = '#c9ccc6'
-    ctx.fillText(`ПАРЫ: ${found}/${this.cards.length / 2}`, r.x + r.w / 2, r.y + hud / 2)
-    const low = this.attempts <= 2 && this.state !== 'intro'
-    const blink = low && Math.floor(now / 300) % 2 === 0
-    ctx.fillStyle = blink ? '#d4402e' : low ? '#d47a5a' : '#c9ccc6'
+    ctx.fillText(`ПОТОК ${this.stream || '·················'}`, r.x + 10, r.y + TOP_H / 2)
     ctx.textAlign = 'right'
-    ctx.fillText(`ПОПЫТКИ: ${Math.max(0, this.attempts)}`, r.x + r.w - 10, r.y + hud / 2)
+    ctx.fillStyle = this.green ? '#7fe08a' : '#c9ccc6'
+    ctx.fillText(`ПЕРЕХВАЧЕНО: ${this.caught}`, r.x + r.w - 10, r.y + TOP_H / 2)
     ctx.textAlign = 'left'
   }
 
+  private drawField(ctx: CanvasRenderingContext2D, field: Rect, catcher: Rect): void {
+    fill(ctx, field, '#071009')
+    // колонки ленты данных
+    ctx.strokeStyle = 'rgba(126, 154, 132, 0.1)'
+    ctx.beginPath()
+    for (let x = field.x + 40; x < field.x + field.w; x += 40) {
+      ctx.moveTo(x + 0.5, field.y)
+      ctx.lineTo(x + 0.5, field.y + field.h)
+    }
+    ctx.stroke()
+    // линия ловли
+    ctx.strokeStyle = 'rgba(159, 211, 159, 0.35)'
+    ctx.setLineDash([6, 6])
+    ctx.beginPath()
+    ctx.moveTo(field.x, field.y + field.h - 0.5)
+    ctx.lineTo(field.x + field.w, field.y + field.h - 0.5)
+    ctx.stroke()
+    ctx.setLineDash([])
+    // биты (не вылезают на строки состояния)
+    ctx.save()
+    ctx.beginPath()
+    ctx.rect(field.x, field.y, field.w, field.h)
+    ctx.clip()
+    for (const b of this.bits) this.drawBit(ctx, field.x + b.x, field.y + b.y, b.bit)
+    ctx.restore()
+    // ловец
+    const edge = this.green ? '#7fe08a' : '#4f8f57'
+    ctx.strokeStyle = edge
+    ctx.lineWidth = 2
+    ctx.strokeRect(catcher.x + 1, catcher.y + 1, catcher.w - 2, catcher.h - 2)
+    ctx.lineWidth = 1
+    ctx.strokeStyle = 'rgba(159, 211, 159, 0.4)'
+    ctx.strokeRect(catcher.x + 6.5, catcher.y + 6.5, catcher.w - 13, catcher.h - 13)
+  }
+
+  private drawBit(ctx: CanvasRenderingContext2D, x: number, y: number, bit: 0 | 1): void {
+    const r: Rect = { x: x - BIT / 2, y: y - BIT / 2, w: BIT, h: BIT }
+    fill(ctx, r, bit ? '#241c08' : '#0c1a10')
+    ctx.strokeStyle = bit ? '#d8b25a' : '#4f8f57'
+    ctx.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1)
+    setFont(ctx, 12, true)
+    ctx.fillStyle = bit ? '#e8c46a' : '#9fd39f'
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillText(String(bit), x, y + 1)
+    ctx.textAlign = 'left'
+  }
+
+  private drawBottom(
+    ctx: CanvasRenderingContext2D,
+    r: Rect,
+    hp: Rect,
+    pb: Rect,
+    now: number,
+  ): void {
+    fill(ctx, { x: r.x, y: r.y + r.h - BOTTOM_H, w: r.w, h: BOTTOM_H }, '#08140c')
+    ctx.strokeStyle = 'rgba(126, 154, 132, 0.35)'
+    ctx.beginPath()
+    ctx.moveTo(r.x, r.y + r.h - BOTTOM_H + 0.5)
+    ctx.lineTo(r.x + r.w, r.y + r.h - BOTTOM_H + 0.5)
+    ctx.stroke()
+
+    // хэш-подпись: копится с битами, в окне подсвечивается зелёным
+    const green = this.green
+    if (green) {
+      const pulse = 0.5 + 0.5 * Math.sin(now / 140)
+      ctx.shadowColor = '#7fe08a'
+      ctx.shadowBlur = 6 + pulse * 10
+    }
+    fill(ctx, hp, green ? '#123018' : '#0a1810')
+    ctx.strokeStyle = green ? '#7fe08a' : '#2c4a34'
+    ctx.strokeRect(hp.x + 0.5, hp.y + 0.5, hp.w - 1, hp.h - 1)
+    ctx.shadowBlur = 0
+    text(ctx, 'ХЭШ-ПОДПИСЬ', hp.x + 8, hp.y + 10, { size: 8, bold: true, color: '#5f7f66' })
+    ctx.font = `bold ${Math.round(15 * 1.12)}px Consolas, monospace`
+    ctx.fillStyle = green ? '#aef2b0' : '#7e9a84'
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillText(this.hash, hp.x + hp.w / 2, hp.y + hp.h / 2 + 6)
+    ctx.textAlign = 'left'
+    const label =
+      this.state === 'paused'
+        ? Math.floor(now / 300) % 2 === 0
+          ? 'КЛИКНИ ПО ХЭШУ'
+          : ''
+        : green
+          ? 'ПОДПИСЬ ВАЛИДНА'
+          : 'ОЖИДАНИЕ ОКНА'
+    if (label) text(ctx, label, hp.x + hp.w - 8, hp.y + 10, { size: 8, bold: true, color: green ? '#aef2b0' : '#5f7f66', align: 'right' })
+
+    // кнопка паузы: только мышь, поэтому в другом углу
+    panel(ctx, pb, true, 1)
+    if (green) {
+      ctx.strokeStyle = '#7fe08a'
+      ctx.strokeRect(pb.x + 1.5, pb.y + 1.5, pb.w - 3, pb.h - 3)
+    }
+    ctx.fillStyle = '#2a2a24'
+    const bx = pb.x + 24
+    const by = pb.y + pb.h / 2 - 6
+    ctx.fillRect(bx, by, 4, 12)
+    ctx.fillRect(bx + 8, by, 4, 12)
+    text(ctx, 'ПАУЗА', pb.x + 70, pb.y + pb.h / 2, {
+      size: 11,
+      bold: true,
+      color: '#16160f',
+    })
+  }
+
   private drawIntro(ctx: CanvasRenderingContext2D, r: Rect): void {
-    ctx.fillStyle = 'rgba(4, 10, 6, 0.85)'
+    ctx.fillStyle = 'rgba(4, 10, 6, 0.86)'
     ctx.fillRect(r.x, r.y, r.w, r.h)
-    const w = Math.min(400, r.w - 30)
-    const h = 190
+    const w = Math.min(420, r.w - 30)
+    const h = 208
     const p: Rect = { x: r.x + (r.w - w) / 2, y: r.y + Math.max(10, (r.h - h) / 2 - 8), w, h }
     panel(ctx, p, true, 2)
-    text(ctx, 'ГОЛОВОЛОМКА ПАР', p.x + w / 2, p.y + 22, {
+    text(ctx, 'ПЕРЕХВАТ ПОТОКА', p.x + w / 2, p.y + 24, {
       size: 14,
       bold: true,
       color: '#16160f',
       align: 'center',
     })
-    text(
-      ctx,
-      `сетка ${this.cfg.cols}×${this.cfg.rows} · пар: ${this.cfg.pairs} · попыток: ${ATTEMPTS}`,
-      p.x + w / 2,
-      p.y + 44,
-      { size: 11, color: '#16160f', align: 'center' },
-    )
+    text(ctx, `цель скрыта: 7–13 бит · окно подписи ±2`, p.x + w / 2, p.y + 44, {
+      size: 10,
+      color: '#5c5c54',
+      align: 'center',
+    })
     const lines = [
-      'карты откроются на несколько секунд —',
-      'запомни, где какая, потом найди все пары.',
-      'промах сжигает попытку, подсмотреть можно 3 раза (P).',
-      'попыток нет — связь обрывается, и на кухне',
-      'кто-то просыпается.',
+      'лови биты 0 и 1 квадратом — движение A/D',
+      'хэш в углу позеленеет, когда поймано достаточно',
+      'успей нажать ПАУЗУ мышью и кликни по зелёному хэшу',
+      'перелов или пауза мимо окна — поток сбросится',
     ]
-    let y = p.y + 66
+    let y = p.y + 68
     for (const line of lines) {
       text(ctx, line, p.x + w / 2, y, { size: 10, color: '#5c5c54', align: 'center' })
-      y += 14
+      y += 15
     }
     const btn: Rect = { x: p.x + w / 2 - 88, y: p.y + p.h - 30, w: 176, h: 22 }
     panel(ctx, btn, true, 1)
-    text(ctx, 'ПРОБЕЛ — ОТКРЫТЬ КАРТЫ', btn.x + btn.w / 2, btn.y + btn.h / 2, {
+    text(ctx, 'ПРОБЕЛ — НАЧАТЬ', btn.x + btn.w / 2, btn.y + btn.h / 2, {
       size: 10,
       bold: true,
       align: 'center',
     })
     this.startBtn = btn
+  }
+
+  private drawPaused(ctx: CanvasRenderingContext2D, r: Rect, now: number): void {
+    ctx.fillStyle = 'rgba(4, 10, 6, 0.5)'
+    ctx.fillRect(r.x, r.y, r.w, r.h)
+    text(ctx, 'ПАУЗА', r.x + r.w / 2, r.y + r.h / 2 - 12, {
+      size: 18,
+      bold: true,
+      color: '#aef2b0',
+      align: 'center',
+    })
+    if (Math.floor(now / 300) % 2 === 0) {
+      text(ctx, 'подпись заморожена — кликни по зелёному хэшу', r.x + r.w / 2, r.y + r.h / 2 + 12, {
+        size: 11,
+        color: '#c9ccc6',
+        align: 'center',
+      })
+    }
   }
 
   private drawWon(ctx: CanvasRenderingContext2D, r: Rect): void {
@@ -496,7 +515,7 @@ export class PairsGame {
     const h = 170
     const p: Rect = { x: r.x + (r.w - w) / 2, y: r.y + Math.max(10, (r.h - h) / 2 - 8), w, h }
     panel(ctx, p, true, 2)
-    text(ctx, 'АРХИВ ВЗЛОМАН', p.x + w / 2, p.y + 24, {
+    text(ctx, 'ПОДПИСЬ ПРИНЯТА', p.x + w / 2, p.y + 24, {
       size: 14,
       bold: true,
       color: '#16160f',
@@ -535,14 +554,14 @@ export class PairsGame {
     }
     ctx.fillStyle = 'rgba(60, 4, 2, 0.45)'
     ctx.fillRect(r.x, r.y, r.w, r.h)
-    text(ctx, 'СВЯЗЬ ПРЕРВАНА', r.x + r.w / 2, r.y + r.h / 2 - 16, {
+    text(ctx, 'ПОДПИСЬ НЕ СОШЛАСЬ', r.x + r.w / 2, r.y + r.h / 2 - 16, {
       size: 20,
       bold: true,
       color: '#e8523a',
       align: 'center',
     })
     if (Math.floor(now / 400) % 2 === 0) {
-      text(ctx, 'попытки исчерпаны · на кухне стало тихо', r.x + r.w / 2, r.y + r.h / 2 + 10, {
+      text(ctx, 'поток повреждён · на кухне кто-то проснулся', r.x + r.w / 2, r.y + r.h / 2 + 10, {
         size: 11,
         color: '#c9a08a',
         align: 'center',

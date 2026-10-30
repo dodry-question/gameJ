@@ -1,6 +1,6 @@
 // Полная проверка кухни: переход → КАМ-05 → скан → команды (нож, холодильник,
-// мясо, принтер) → pairs.local → пароль → печать → дверь → «ОНА УШЛА».
-// Отдельно — провал: мурзик, маньяк, экран «ВЫ ПРОИГРАЛИ».
+// мясо, принтер) → pairs.local (перехват потока) → пароль → печать → дверь →
+// «ОНА УШЛА». Отдельно — провал: мурзик, маньяк, экран «ВЫ ПРОИГРАЛИ».
 //   node tools/check-kitchen.mjs [url] [outDir]
 import { chromium } from 'playwright-core'
 import { mkdirSync } from 'node:fs'
@@ -114,15 +114,21 @@ result.noteTextAfterPrinter = await page.evaluate(() =>
   window.__desk?.windows.find((w) => w.app.title.includes('заметки'))?.app.text ?? null,
 )
 
-// ── 5. pairs.local: два этапа → код → print.local → печать ───────────
+// ── 5. pairs.local: перехват потока → код → print.local → печать ─────
 await click(38, 704, 300)
 await click(110, 522, 1500)
 result.pairsPage = await navigate('pairs.local')
-await page.keyboard.press('Space') // показ карт
+await page.keyboard.press('Space') // начать перехват
 await page.waitForTimeout(300)
-await page.evaluate(() => window.__pairs.debugSkipMemorize())
-await page.evaluate(() => window.__pairs.debugSolveStage())
-await page.waitForTimeout(1800)
+// честно догоняем до нижней границы зелёного окна и коммитим подпись
+await page.evaluate(() => {
+  const st = window.__pairs.debugState()
+  window.__pairs.debugCatch(st.window[0] - st.caught)
+})
+await page.waitForTimeout(200)
+const hashBtns = await page.evaluate(() => window.__pairs.debugButtons())
+await click(hashBtns.pause.x, hashBtns.pause.y, 300)
+await click(hashBtns.hash.x, hashBtns.hash.y, 300)
 const password = await page.evaluate(() => window.__pairs.debugState().password)
 result.password = password
 await shot('05-code')
