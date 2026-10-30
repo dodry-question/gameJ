@@ -203,6 +203,8 @@ export class Desktop {
       (w) => !w.min && w.app instanceof Browser && w.app.viewingCamera,
     )
     if (!cameraOpen) this.sound.setBreathing(null)
+    // Звуки комнаты с камеры идут своей тихой шиной, пока страница открыта.
+    this.sound.setCameraAudio(cameraOpen)
 
     const minute = new Date().getMinutes()
     if (minute !== this.lastMinute) {

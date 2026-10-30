@@ -19,6 +19,15 @@ export class Sound {
   private breathStress: number | null = null
   private breathSrc: AudioBufferSourceNode | null = null
   private breathGain: GainNode | null = null
+  /** Тихая шина звуков с камеры: капли, гул подвала, голос девушки. */
+  private camBus: GainNode | null = null
+  private camGate: GainNode | null = null
+  private camOn = false
+  private camDripTimer: number | null = null
+  private camVoiceTimer: number | null = null
+  private camVoices: { hum: AudioBuffer | null; cry: AudioBuffer | null } = { hum: null, cry: null }
+  private camVoiceLoading = false
+  private camDrone = false
   private started = false
   /** Общая громкость игры: 1 — максимум, с которого стартуем. */
   private level = storedVolume()
@@ -77,6 +86,7 @@ export class Sound {
       this.ctx = ctx
       this.master = master
       this.noise = noiseBuffer(ctx)
+      this.cameraBus()
       this.loadAmbient()
       this.loadModem()
       this.scheduleModem(28 + Math.random() * 26)
@@ -340,7 +350,7 @@ export class Sound {
       src.loop = true
       const g = ctx.createGain()
       g.gain.value = 0.0001
-      src.connect(g).connect(this.master!)
+      src.connect(g).connect(this.cameraBus() ?? this.master!)
       src.start(t)
       this.breathSrc = src
       this.breathGain = g
@@ -349,7 +359,8 @@ export class Sound {
     const g = this.breathGain!
     g.gain.cancelScheduledValues(t)
     g.gain.setValueAtTime(Math.max(g.gain.value, 0.0001), t)
-    g.gain.linearRampToValueAtTime(0.05 + stress * 0.13, t + 0.8)
+    // дыхание идёт через шину камеры: тише компьютера, как из динамика монитора
+    g.gain.linearRampToValueAtTime(0.25 + stress * 0.35, t + 0.8)
     this.breathSrc!.playbackRate.value = 0.92 + stress * 0.28
   }
 
@@ -453,9 +464,224 @@ export class Sound {
     thump.start(t)
     thump.stop(t + 0.16)
   }
+
+  // ── звуки с камеры ───────────────────────────────────────────────
+
+  /**
+   * Что слышит микрофон камеры: тихий гул подвала, редкие капли воды, голос
+   * девушки. Всё это идёт через отдельную шину — глухую и на порядок тише
+   * звуков компьютера, чтобы игрок не путал запись с тем, что у него самого.
+   * Шина открывается, только пока на экране страница КАМ-04.
+   */
+  setCameraAudio(on: boolean): void {
+    if (this.camOn === on) return
+    this.camOn = on
+    const ctx = this.ctx
+    const gate = this.cameraGate()
+    if (!ctx || !gate) return
+    const t = ctx.currentTime
+    gate.gain.cancelScheduledValues(t)
+    gate.gain.setValueAtTime(Math.max(gate.gain.value, 0.0001), t)
+    if (on) {
+      gate.gain.linearRampToValueAtTime(CAM_LEVEL, t + 1.2)
+      this.startCameraDrone()
+      this.loadCameraVoice()
+      this.scheduleDrips(1 + Math.random() * 2)
+      this.scheduleVoice(8 + Math.random() * 9)
+    } else {
+      gate.gain.linearRampToValueAtTime(0.0001, t + 0.8)
+      if (this.camDripTimer !== null) window.clearTimeout(this.camDripTimer)
+      if (this.camVoiceTimer !== null) window.clearTimeout(this.camVoiceTimer)
+      this.camDripTimer = null
+      this.camVoiceTimer = null
+    }
+  }
+
+  private cameraGate(): GainNode | null {
+    this.cameraBus()
+    return this.camGate
+  }
+
+  /**
+   * Шина камеры: узкая полоса, как маленький динамик монитора (без низа и
+   * верха), короткое эхо бетонного коридора и общий уровень CAM_LEVEL.
+   */
+  private cameraBus(): GainNode | null {
+    if (!this.ctx || !this.master) return null
+    if (this.camGate) return this.camBus
+    const ctx = this.ctx
+    const bus = ctx.createGain()
+    const hp = ctx.createBiquadFilter()
+    hp.type = 'highpass'
+    hp.frequency.value = 170
+    const lp = ctx.createBiquadFilter()
+    lp.type = 'lowpass'
+    lp.frequency.value = 2400
+    const gate = ctx.createGain()
+    gate.gain.value = 0.0001
+    const echo = ctx.createDelay(0.4)
+    echo.delayTime.value = 0.12
+    const fb = ctx.createGain()
+    fb.gain.value = 0.24
+    const wet = ctx.createGain()
+    wet.gain.value = 0.35
+    bus.connect(hp).connect(lp)
+    lp.connect(gate)
+    lp.connect(echo)
+    echo.connect(fb).connect(echo)
+    echo.connect(wet).connect(gate)
+    gate.connect(this.master)
+    this.camBus = bus
+    this.camGate = gate
+    return bus
+  }
+
+  /** Гул подвала: два слоя шума вразнобой, чтобы петля не читалась. */
+  private startCameraDrone(): void {
+    const ctx = this.ctx
+    const bus = this.cameraBus()
+    if (!ctx || !bus || this.camDrone || !this.noise) return
+    this.camDrone = true
+    for (const rate of [0.93, 1.07]) {
+      const src = ctx.createBufferSource()
+      src.buffer = this.noise
+      src.loop = true
+      src.playbackRate.value = rate
+      const lp = ctx.createBiquadFilter()
+      lp.type = 'lowpass'
+      lp.frequency.value = 180 + rate * 40
+      const g = ctx.createGain()
+      g.gain.value = 0.16
+      src.connect(lp).connect(g).connect(bus)
+      src.start()
+    }
+    // далёкая труба: почти неслышный тон
+    const hum = ctx.createOscillator()
+    hum.type = 'sine'
+    hum.frequency.value = 58
+    const hg = ctx.createGain()
+    hg.gain.value = 0.05
+    hum.connect(hg).connect(bus)
+    hum.start()
+  }
+
+  private scheduleDrips(delaySec: number): void {
+    if (!this.camOn) return
+    this.camDripTimer = window.setTimeout(() => {
+      this.camDripTimer = null
+      if (!this.camOn) return
+      this.waterDrip(0)
+      if (Math.random() < 0.22) this.waterDrip(0.16 + Math.random() * 0.22)
+      this.scheduleDrips(2.4 + Math.random() * 4.8)
+    }, delaySec * 1000)
+  }
+
+  /** Капля в лужу: короткий «плинк» с падением тона и брызгами поверх. */
+  private waterDrip(when: number): void {
+    const ctx = this.ctx
+    const bus = this.camBus
+    if (!ctx || !bus || !this.noise) return
+    const t = ctx.currentTime + when + 0.01
+
+    const f = 520 + Math.random() * 760
+    const osc = ctx.createOscillator()
+    osc.type = 'sine'
+    osc.frequency.setValueAtTime(f, t)
+    osc.frequency.exponentialRampToValueAtTime(f * 0.42, t + 0.055)
+    const env = ctx.createGain()
+    env.gain.setValueAtTime(0.0001, t)
+    env.gain.linearRampToValueAtTime(0.34 + Math.random() * 0.16, t + 0.004)
+    env.gain.exponentialRampToValueAtTime(0.0001, t + 0.11)
+    osc.connect(env).connect(bus)
+    osc.start(t)
+    osc.stop(t + 0.14)
+
+    const src = ctx.createBufferSource()
+    src.buffer = this.noise
+    src.playbackRate.value = 1.6 + Math.random() * 0.8
+    const bp = ctx.createBiquadFilter()
+    bp.type = 'bandpass'
+    bp.frequency.value = 1600 + Math.random() * 1600
+    bp.Q.value = 1.4
+    const sg = ctx.createGain()
+    sg.gain.setValueAtTime(0.0001, t)
+    sg.gain.linearRampToValueAtTime(0.08, t + 0.005)
+    sg.gain.exponentialRampToValueAtTime(0.0001, t + 0.05)
+    src.connect(bp).connect(sg).connect(bus)
+    src.start(t)
+    src.stop(t + 0.08)
+  }
+
+  /**
+   * Голос с камеры: она тихо напевает себе под нос (CC0, PSsoundproject,
+   * Freesound 183565) или, когда совсем плохо, сдавленно всхлипывает
+   * (CC0, AlucardsBride). Короткими обрывками и очень тихо.
+   */
+  cameraVoice(kind?: 'hum' | 'cry'): void {
+    const ctx = this.ctx
+    const bus = this.camBus
+    if (!ctx || !bus) return
+    const stressed = this.breathStress !== null && this.breathStress > 0.8
+    const cry = kind === 'cry' || (kind !== 'hum' && stressed && Math.random() < 0.45)
+    const buf = cry ? this.camVoices.cry : this.camVoices.hum
+    if (!buf) {
+      this.loadCameraVoice()
+      return
+    }
+    const t = ctx.currentTime
+    const dur = Math.min(buf.duration - 0.25, cry ? 3.2 + Math.random() * 2.4 : 5 + Math.random() * 4)
+    const offset = Math.random() * Math.max(0.1, buf.duration - dur - 0.2)
+    const src = ctx.createBufferSource()
+    src.buffer = buf
+    src.playbackRate.value = 0.96 + Math.random() * 0.08
+    const lp = ctx.createBiquadFilter()
+    lp.type = 'lowpass'
+    lp.frequency.value = 1900
+    const g = ctx.createGain()
+    const peak = cry ? 0.2 : 0.28
+    g.gain.setValueAtTime(0.0001, t)
+    g.gain.linearRampToValueAtTime(peak, t + 0.7)
+    g.gain.setValueAtTime(peak, t + Math.max(0.8, dur - 0.8))
+    g.gain.linearRampToValueAtTime(0.0001, t + dur)
+    src.connect(lp).connect(g).connect(bus)
+    src.start(t, offset, dur)
+  }
+
+  private scheduleVoice(delaySec: number): void {
+    if (!this.camOn) return
+    this.camVoiceTimer = window.setTimeout(() => {
+      this.camVoiceTimer = null
+      if (!this.camOn) return
+      this.cameraVoice()
+      this.scheduleVoice(24 + Math.random() * 30)
+    }, delaySec * 1000)
+  }
+
+  private loadCameraVoice(): void {
+    const ctx = this.ctx
+    if (!ctx || this.camVoiceLoading) return
+    if (this.camVoices.hum && this.camVoices.cry) return
+    this.camVoiceLoading = true
+    const load = (file: string, key: 'hum' | 'cry'): void => {
+      fetch(`sounds/voice/${file}`)
+        .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error('нет файла'))))
+        .then((b) => ctx.decodeAudioData(b))
+        .then((buf) => {
+          this.camVoices[key] = buf
+        })
+        .catch(() => {
+          // без голоса живём: капли и гул всё равно есть
+        })
+    }
+    load('hum.wav', 'hum')
+    load('cry.ogg', 'cry')
+  }
 }
 
 // ── буферы ─────────────────────────────────────────────────────────
+
+/** Громкость шины камеры: примерно на порядок ниже звуков компьютера. */
+const CAM_LEVEL = 0.09
 
 const VOLUME_KEY = 'sound.volume'
 
