@@ -61,37 +61,50 @@ await page.waitForTimeout(250)
 await shot('03-selection')
 await click(600, 400, 250)
 
-// ── часть 2: почта, архив, установка ──────────────────────────────
+// ── часть 2: почта, установщик, вирус-тыква ──────────────────────
 await dbl(54, 54, 1500) // Почта
+await page.waitForTimeout(1200) // письмо приходит через 5 с после входа
 await shot('04-mail')
 
-await click(500, 530, 400) // «Скачать» вложение
-await shot('05-install')
+await click(800, 539, 400) // «Скачать» вложение
+await shot('05-virus')
 
 await page.waitForTimeout(3000)
-await shot('06-installed')
+await shot('06-install')
 
-// ── часть 3: запуск exe, камера, письмо ───────────────────────────
-await dbl(148, 54, 1900) // cam04.exe
-await shot('07-camera-locked')
+await page.waitForTimeout(2600)
+await shot('07-installed')
+
+// ── часть 3: tds.exe, карта, удержание камеры ────────────────────
+await dbl(54, 518, 1500) // tds.exe
+await shot('08-map')
+
+await page.mouse.move(498, 486)
+await page.mouse.down()
+await page.waitForTimeout(2100)
+await page.mouse.up()
+await page.waitForTimeout(300)
+await shot('09-connect')
+await page.waitForTimeout(1100)
+await shot('10-camera-reveal')
+await page.waitForTimeout(2000)
+await shot('11-camera-ready')
 
 await click(54, 54, 400) // поднять почту
-await click(500, 156, 500) // прочитать письмо похитителей
-await shot('08-mail-threat')
+await shot('12-mail-threat')
 
-await click(400, 95, 400) // поднять камеру за заголовок
-await shot('09-camera-ready')
-
-await click(679, 507, 900) // «Открыть дверь»
-await shot('10-camera-open')
+await click(300, 705, 400) // вернуть TDS из панели задач
+await click(119, 657, 900) // «Отвязать»
+await click(119, 657, 700) // «Открыть дверь»
+await shot('13-camera-open')
 await page.waitForTimeout(2600)
-await shot('11-camera-gone')
+await shot('14-camera-gone')
 
 // ── часть 4: проводник и перетаскивание ярлыка ────────────────────
 await page.goto(`${url}?ui`, { waitUntil: 'networkidle' })
 await page.waitForTimeout(900)
 await dbl(54, 242, 1100) // Мой компьютер
-await shot('12-explorer')
+await shot('15-explorer')
 
 // перетаскиваем ярлык «Почта» вниз-вправо
 await page.mouse.move(54, 54)
@@ -101,12 +114,12 @@ for (let i = 1; i <= 12; i++) {
 }
 await page.mouse.up()
 await page.waitForTimeout(250)
-await shot('13-icon-moved')
+await shot('16-icon-moved')
 
 // ── часть 5: 3D-вид с монитором ───────────────────────────────────
 await page.goto(url, { waitUntil: 'networkidle' })
 await page.waitForTimeout(2800)
-await page.screenshot({ path: `${out}/14-room.png` })
+await page.screenshot({ path: `${out}/17-room.png` })
 
 console.log(errors.length ? `ОШИБКИ:\n${errors.join('\n')}` : 'ошибок в консоли нет')
 await browser.close()

@@ -1,6 +1,6 @@
-// Проверка звуков с камеры: голос не грузится до открытия страницы, шина
-// камеры открывается на CAM_LEVEL, капли и голос реально стартуют, а после
-// закрытия страницы шина гаснет и таймеры молчат.
+// Проверка звуков с камеры: голос не грузится до входа в эфир, шина камеры
+// открывается на CAM_LEVEL, капли и голос реально стартуют, а после возврата
+// на карту TDS шина гаснет и таймеры молчат.
 //   node tools/check-camera-audio.mjs [url]
 import { chromium } from 'playwright-core'
 
@@ -79,20 +79,16 @@ const click = async (x, y, wait = 600) => {
   await page.waitForTimeout(wait)
 }
 
-// Интернет → адрес камеры
-await click(55, 137, 60)
-await page.mouse.down()
-await page.mouse.up()
-await page.waitForTimeout(1900)
-await click(400, 141, 400)
+// Клик по пустому столу распаковывает WebAudio: без жеста браузер молчит.
+await click(700, 600, 100)
 
 const beforeOpen = await page.evaluate(() => ({
   t: performance.now(),
   voiceReqs: window.__reqs.filter((r) => r.u.includes('sounds/voice/')).length,
 }))
 
-await page.keyboard.type('http://192.168.0.13/cam04', { delay: 15 })
-await page.keyboard.press('Enter')
+// Входим в эфир тем же путём, что и игрок: отладочный вход TDS.
+await page.evaluate(() => window.__desk.debugOpenCamera())
 const opened = await page.evaluate(() => performance.now())
 
 // Ждём: капли идут через 1–3 с, голос — через 8–17 с
@@ -139,10 +135,9 @@ const whileOpen = await page.evaluate(
   [opened, beforeOpen.t],
 )
 
-// Закрываем страницу камеры: другой адрес в том же браузере
-await click(400, 141, 200)
-await page.keyboard.type('http://intranet.local/', { delay: 10 })
-await page.keyboard.press('Enter')
+// Уходим из эфира на карту: кнопка «← КАРТА» в шапке TDS (окно развёрнуто).
+await click(58, 41, 200)
+const backOnMap = await page.evaluate(() => window.__tds?.debugInfo().screen)
 await page.waitForTimeout(1600)
 const closed = await page.evaluate(() => performance.now())
 const gatesClosed = await page.evaluate(() =>
@@ -180,6 +175,7 @@ console.log('  голосовые отрывки:', JSON.stringify(whileOpen.voi
 console.log('  громкость шин (узлы с 0.001…0.75):', JSON.stringify([...perNode].map(([i, v]) => `${i}:${v}`)))
 console.log('  после закрытия:', JSON.stringify(gatesClosed.map((x) => `${x.i}:${x.v}`)))
 console.log('ПОСЛЕ ЗАКРЫТИЯ')
+console.log('  экран TDS после возврата:', backOnMap)
 console.log('  новые старты за 5 с:', JSON.stringify(afterClose))
 console.log(errors.length ? `ОШИБКИ:\n${errors.join('\n')}` : 'ошибок в консоли нет')
 await browser.close()

@@ -7,7 +7,7 @@ import { mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-const url = process.argv[2] ?? 'http://127.0.0.1:5175/?ui'
+const url = process.argv[2] ?? 'http://127.0.0.1:5175/?ui&cam'
 const out = process.argv[3] ?? join(tmpdir(), 'opencode', 'girl')
 const frames = Number(process.argv[4] ?? 4)
 const gap = Number(process.argv[5] ?? 700)
@@ -35,20 +35,7 @@ page.on('pageerror', (e) => errors.push(String(e)))
 await page.goto(url, { waitUntil: 'networkidle' })
 await page.waitForTimeout(1500)
 
-const click = async (x, y, wait = 600) => {
-  await page.mouse.move(x, y, { steps: 4 })
-  await page.mouse.down()
-  await page.mouse.up()
-  await page.waitForTimeout(wait)
-}
-
-await click(55, 137, 60)
-await page.mouse.down()
-await page.mouse.up()
-await page.waitForTimeout(1900)
-await click(400, 141, 400)
-await page.keyboard.type('http://192.168.0.13/cam04', { delay: 15 })
-await page.keyboard.press('Enter')
+// TDS открыт сразу через ?ui&cam: браузерный пролог больше не нужен.
 await page.waitForTimeout(2500)
 
 const cam = CAMERAS[view] ?? CAMERAS.close
