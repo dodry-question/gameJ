@@ -23,6 +23,7 @@ export const CAMS: Cam[] = [
   { id: '02', name: 'КОРИДОР', online: false, fx: 0.44, fy: 0.19 },
   { id: '03', name: 'ЛЕСТНИЦА', online: false, fx: 0.91, fy: 0.43 },
   { id: '04', name: 'КОМНАТА 4', online: true, fx: 0, fy: 0 },
+  { id: '05', name: 'КУХНЯ', online: false, fx: 0.7, fy: 0.44 },
 ]
 
 /** Доли комнаты 4 внутри здания; по ним мир камеры ложится на план. */
@@ -76,6 +77,12 @@ export class TdsMap {
       if (x >= h.r.x && y >= h.r.y && x < h.r.x + h.r.w && y < h.r.y + h.r.h) return h.cam
     }
     return null
+  }
+
+  /** Узел 05 оживает, когда девушка добралась до кухни. */
+  isOnline(cam: Cam): boolean {
+    if (cam.id === '05') return getCctv().kitchenReady
+    return cam.online
   }
 
   draw(ctx: CanvasRenderingContext2D, area: Rect, hold: HoldState | null, message: string | null): void {
@@ -177,8 +184,9 @@ export class TdsMap {
     // ── подвал ──────────────────────────────────────────────────────
     const footY = area.y + area.h - 18
     setFont(ctx, 10)
+    const inNet = CAMS.filter((c) => this.isOnline(c)).length
     ctx.fillStyle = '#7e8c80'
-    ctx.fillText('БЛОК C · В СЕТИ 1 ИЗ 4', area.x + 18, footY)
+    ctx.fillText(`БЛОК C · В СЕТИ ${inNet} ИЗ ${CAMS.length}`, area.x + 18, footY)
     ctx.textAlign = 'right'
     ctx.fillStyle = '#5f6f62'
     ctx.fillText('TDS 2.1 · УЗЕЛ INTRANET-LOCAL', area.x + area.w - 18, footY)
@@ -246,7 +254,7 @@ export class TdsMap {
 
   private node(ctx: CanvasRenderingContext2D, cam: Cam, cx: number, cy: number, p: number): void {
     const r: Rect = { x: cx - 15, y: cy - 11, w: 30, h: 22 }
-    if (cam.online) {
+    if (this.isOnline(cam)) {
       panel(ctx, r, true, 1)
       setFont(ctx, 10, true)
       ctx.fillStyle = '#1d3a1d'
@@ -274,11 +282,12 @@ export class TdsMap {
     }
 
     setFont(ctx, 9)
-    ctx.fillStyle = cam.online ? '#a9c9ae' : '#6f7d72'
+    const online = this.isOnline(cam)
+    ctx.fillStyle = online ? '#a9c9ae' : '#6f7d72'
     ctx.textAlign = 'center'
     ctx.fillText(cam.name, cx, r.y + r.h + 10)
-    ctx.fillStyle = cam.online ? '#2c7a2c' : '#6b5a3a'
-    ctx.fillText(cam.online ? 'В СЕТИ' : 'НЕТ СВЯЗИ', cx, r.y + r.h + 21)
+    ctx.fillStyle = online ? '#2c7a2c' : '#6b5a3a'
+    ctx.fillText(online ? 'В СЕТИ' : 'НЕТ СВЯЗИ', cx, r.y + r.h + 21)
 
     // удержание: кольцо заполняется по кругу
     if (p > 0) {

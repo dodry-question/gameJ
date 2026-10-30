@@ -34,7 +34,10 @@ export class CameraFeed {
   private released = 0
   private debugGirl = false
   private debugDoor = false
+  private debugKitchen = false
   private noise: HTMLCanvasElement
+  /** Какой канал смотрим: 04 — комната 4, 05 — кухня. */
+  private channel: '04' | '05' = '04'
 
   /**
    * Кнопка «Открыть дверь» больше не отпирает замок сама: терминал выдаёт
@@ -55,6 +58,18 @@ export class CameraFeed {
 
   get releasedGirl(): boolean {
     return this.phase === 'open'
+  }
+
+  /** Канал, который сейчас подключён — для подписей в шапке. */
+  get channelNow(): '04' | '05' {
+    return this.channel
+  }
+
+  /** Узел на карте выбран: переключаем ракурс сцены. */
+  setChannel(ch: '04' | '05'): void {
+    if (this.channel === ch) return
+    this.channel = ch
+    this.cctv?.setView(ch)
   }
 
   /** Замок снят (в браузере или отладчиком): дверь отпирается. */
@@ -123,7 +138,8 @@ export class CameraFeed {
     const cctv = this.cctv ?? (this.cctv = getCctv())
     this.t += 0.016
 
-    // Отладка: ?girl — девушку отвязывают сразу, ?door — сразу открывают дверь.
+    // Отладка: ?girl — девушку отвязывают сразу, ?door — сразу открывают дверь,
+    // ?kitchen — сразу отправляют в кухню (для инструментов).
     if (cctv.loaded) {
       if (!this.debugGirl && location.search.includes('girl')) {
         this.debugGirl = true
@@ -136,14 +152,18 @@ export class CameraFeed {
         this.released = 0
         cctv.release()
       }
+      if (!this.debugKitchen && location.search.includes('kitchen')) {
+        this.debugKitchen = true
+        this.phase = 'untied'
+        cctv.debugToKitchen()
+      }
     }
 
     if (this.phase === 'open') {
       this.released += 0.016
-      // исчезает не на пороге, а когда уйдёт в глубь коридора и растворится
-      // в темноте; 9 с — страховка, если она почему-то застряла
-      const pos = cctv.girlPos
-      if ((pos !== null && pos.z < -6.9) || this.released > 9) cctv.setState('gone')
+      // Порог ухода в темноту переехал в cctv: там она сворачивает в кухню
+      // и появляется в кадре КАМ-05. Здесь только страховка от застревания.
+      if (this.released > 15 && cctv.girlState === 'run') cctv.setState('gone')
     }
 
     // дыхание девушки: слышно, пока виден кадр, и чем больше стресс, тем чаще
@@ -202,9 +222,11 @@ export class CameraFeed {
     setFont(ctx, 11, true)
     ctx.fillStyle = '#8fd08f'
     ctx.textBaseline = 'middle'
-    ctx.fillText('CAM 04', head.x + 2, head.y + head.h / 2)
+    const camLabel = this.channel === '05' ? 'CAM 05' : 'CAM 04'
+    const placeLabel = this.channel === '05' ? 'КУХНЯ, БЛОК C' : 'КОМНАТА 4, БЛОК C'
+    ctx.fillText(camLabel, head.x + 2, head.y + head.h / 2)
     ctx.fillStyle = '#c9ccc6'
-    ctx.fillText('· КОМНАТА 4, БЛОК C', head.x + 62, head.y + head.h / 2)
+    ctx.fillText(`· ${placeLabel}`, head.x + 62, head.y + head.h / 2)
 
     if (ready && Math.floor(this.t * 2) % 2 === 0) {
       ctx.fillStyle = '#c0392b'

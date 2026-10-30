@@ -68,6 +68,7 @@ src/desktop/apps/explorer.ts — «Мой компьютер»: папки, фа
 src/desktop/apps/image-viewer.ts — просмотр картинок (пасхалка проводника)
 src/desktop/clipboard.ts     — системный буфер обмена с запасным путём
 src/cctv.ts               — 3D-сцена камеры: комната, девушка, состояния
+src/cctv-kitchen.ts       — кухня за коридором: стол, холодильник, лампа, КАМ-05
 src/desktop/apps/note.ts  — заглушка окна
 public/favicon.svg
 public/sounds/        — эмбиент, dial-up модем, дыхание героини, скрип пола,

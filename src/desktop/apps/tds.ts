@@ -79,9 +79,19 @@ export class Tds implements App {
     this.feed.startNow()
   }
 
-  /** Состояние экрана и точка узла 04 — для проверок из tools/. */
-  debugInfo(): { screen: Screen; cam: { x: number; y: number } | null; door: boolean } {
-    return { screen: this.screen, cam: this.map.point('04'), door: this.feed.releasedGirl }
+  /** Состояние экрана и точки узлов — для проверок из tools/. */
+  debugInfo(): {
+    screen: Screen
+    cam: { x: number; y: number } | null
+    cam05: { x: number; y: number } | null
+    door: boolean
+  } {
+    return {
+      screen: this.screen,
+      cam: this.map.point('04'),
+      cam05: this.map.point('05'),
+      door: this.feed.releasedGirl,
+    }
   }
 
   tick(): boolean {
@@ -145,7 +155,7 @@ export class Tds implements App {
 
     const cam = this.map.hit(x, y)
     if (!cam) return
-    if (!cam.online) {
+    if (!this.map.isOnline(cam)) {
       this.say(`КАМЕРА ${cam.id} · НЕТ СВЯЗИ`)
       this.sound.error()
       return
@@ -174,6 +184,8 @@ export class Tds implements App {
   }
 
   private beginConnect(): void {
+    // канал выбирается по узлу, который держали: 04 — комната 4, 05 — кухня
+    this.feed.setChannel((this.hold?.id as '04' | '05') ?? '04')
     this.hold = null
     this.screen = 'loading'
     this.connectAt = performance.now() + CONNECT_MS
@@ -230,15 +242,20 @@ export class Tds implements App {
     setFont(ctx, 14, true)
     ctx.fillStyle = C.text
     ctx.textBaseline = 'middle'
-    ctx.fillText(this.screen === 'map' ? 'TDS' : 'КАМЕРА 04', x, cy - 2)
+    const camId = this.feed.channelNow
+    ctx.fillText(this.screen === 'map' ? 'TDS' : `КАМЕРА ${camId}`, x, cy - 2)
     setFont(ctx, 9)
     ctx.fillStyle = C.textDim
     const sub =
       this.screen === 'map'
         ? 'ТЕРМИНАЛ НАБЛЮДЕНИЯ · БЛОК C'
         : this.screen === 'loading'
-          ? 'ПОДКЛЮЧЕНИЕ · КОМНАТА 4'
-          : 'КОМНАТА 4 · БЛОК C'
+          ? camId === '05'
+            ? 'ПОДКЛЮЧЕНИЕ · КУХНЯ'
+            : 'ПОДКЛЮЧЕНИЕ · КОМНАТА 4'
+          : camId === '05'
+            ? 'КОМНАТА 5 · КУХНЯ · БЛОК C'
+            : 'КОМНАТА 4 · БЛОК C'
     ctx.fillText(sub, x, cy + 12)
 
     // справа: часы и лампа связи

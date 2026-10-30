@@ -17,8 +17,10 @@
 import * as THREE from 'three'
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js'
 import { buildRoom } from './cctv-room'
+import { buildKitchen, KITCHEN_OBSTACLES, KITCHEN } from './cctv-kitchen'
+import type { Kitchen } from './cctv-kitchen'
 
-export type GirlState = 'tied' | 'idle' | 'pace' | 'knock' | 'run' | 'gone'
+export type GirlState = 'tied' | 'idle' | 'pace' | 'knock' | 'run' | 'toKitchen' | 'kitchen' | 'gone'
 
 const W = 320
 const H = 240
@@ -103,6 +105,10 @@ export class Cctv {
   private gapLight: THREE.PointLight
   private dust: THREE.Points
   private lamp: THREE.PointLight
+  /** Кухня за коридором: объекты и лампа. */
+  private kitchen: Kitchen
+  /** Какой камерой смотрим: 04 — комната 4, 05 — кухня. */
+  private view: '04' | '05' = '04'
   /** Кольца верёвки на запястьях: вяжутся к рукам, пока девушка привязана. */
   private wristRopes: THREE.Mesh[] = []
   private handA = new THREE.Vector3()
@@ -138,6 +144,8 @@ export class Cctv {
   private gesture: { kind: 'look' | 'wave' | 'shiver' | 'fidget'; start: number; dur: number; side: number } | null =
     null
   private gestureNext = 7
+  /** Когда снова выбрать точку блуждания по кухне. */
+  private wanderNext = 0
   private euler = new THREE.Euler()
   private delta = new THREE.Quaternion()
   private deltaWorld = new THREE.Quaternion()
@@ -148,6 +156,13 @@ export class Cctv {
     pos: [1.7, 2.2, 1.4] as [number, number, number],
     at: [-0.55, 0.85, -1.3] as [number, number, number],
     fov: 58,
+  }
+
+  /** Камера кухни: тот же рендер, другой ракурс. */
+  static readonly CAM05 = {
+    pos: [1.85, 2.5, -9.55] as [number, number, number],
+    at: [-0.45, 0.7, -11.9] as [number, number, number],
+    fov: 64,
   }
 
   /** Видит ли камера точку (x, z) — для радара на карте. */
@@ -192,6 +207,7 @@ export class Cctv {
     this.gapGlow = room.gapGlow
     this.gapLight = room.gapLight
     this.dust = room.dust
+    this.kitchen = buildKitchen(this.scene)
     this.loadGirl()
 
     // Отладочный доступ к сцене — для tools/rig-axes.mjs и tools/shot-*.mjs.
@@ -280,13 +296,34 @@ export class Cctv {
     return this.state === 'gone'
   }
 
+  /** Текущее состояние девушки — страховки сценария в CameraFeed. */
+  get girlState(): GirlState {
+    return this.state
+  }
+
+  /** Девушка пошла в кухню: узел 05 на карте оживает. */
+  get kitchenReady(): boolean {
+    return this.state === 'toKitchen' || this.state === 'kitchen'
+  }
+
+  /** Смотреть этим каналом: переключает ракурс камеры. */
+  setView(view: '04' | '05'): void {
+    if (this.view === view) return
+    this.view = view
+    this.applyCam()
+  }
+
+  get viewNow(): '04' | '05' {
+    return this.view
+  }
+
   /** Параметры единственной камеры — для карты и радара. */
   get cam(): typeof Cctv.CAM {
     return Cctv.CAM
   }
 
   private applyCam(): void {
-    const v = Cctv.CAM
+    const v = this.view === '05' ? Cctv.CAM05 : Cctv.CAM
     this.camera.fov = v.fov
     this.camera.position.set(...v.pos)
     this.camera.lookAt(...v.at)
@@ -314,6 +351,16 @@ export class Cctv {
     } else if (state === 'idle') {
       this.targetX = this.girl!.position.x
       this.targetZ = this.girl!.position.z
+    } else if (state === 'toKitchen') {
+      // через весь коридор и проём в кухню
+      this.targetX = KITCHEN.doorX
+      this.targetZ = KITCHEN.z1 - 0.6
+      this.yawTarget = Math.PI
+    } else if (state === 'kitchen') {
+      // оказалась внутри: начинает осваиваться с центра кухни
+      this.targetX = 0
+      this.targetZ = -10.7
+      this.wanderNext = this.time + 2.5
     }
   }
 
@@ -417,6 +464,9 @@ export class Cctv {
     this.dust.rotation.y = this.time * 0.03
     this.dust.position.y = Math.sin(this.time * 0.17) * 0.06
 
+    // кухня живёт своей жизнью, даже когда её не смотрят
+    this.kitchen.update(dt, this.time)
+
     if (this.doorOpen > 0 && this.doorOpen < 1) {
       this.doorOpen = Math.min(1, this.doorOpen + dt * 1.6)
       this.doorPivot.rotation.y = -this.doorOpen * 1.5
@@ -437,6 +487,28 @@ export class Cctv {
       if (cycle < 7) this.setState('pace')
       else if (cycle < 11) this.setState('knock')
       else this.setState('idle')
+      return
+    }
+    // В кухне бродит сама: время от времени выбирает новую точку.
+    if (this.state === 'kitchen') {
+      const g = this.girl!
+      const near = Math.hypot(g.position.x - this.targetX, g.position.z - this.targetZ) < 0.35
+      if (near && this.time >= this.wanderNext) {
+        this.wanderNext = this.time + 4 + Math.random() * 5
+        for (let i = 0; i < 12; i++) {
+          const x = KITCHEN.x0 + 0.5 + Math.random() * 3.0
+          const z = KITCHEN.z0 + 0.5 + Math.random() * 2.6
+          const blocked = KITCHEN_OBSTACLES.some(
+            (o) => Math.hypot(x - o.x, z - o.z) < o.r + 0.25,
+          )
+          if (!blocked) {
+            this.targetX = x
+            this.targetZ = z
+            this.yawTarget = Math.atan2(x - g.position.x, z - g.position.z)
+            break
+          }
+        }
+      }
     }
   }
 
@@ -454,7 +526,8 @@ export class Cctv {
       }
       return
     }
-    if (this.freeT < 1 || (this.state !== 'pace' && this.state !== 'idle')) return
+    if (this.freeT < 1) return
+    if (this.state !== 'pace' && this.state !== 'idle' && this.state !== 'kitchen') return
     if (t < this.gestureNext) return
 
     const r = Math.random()
@@ -464,20 +537,34 @@ export class Cctv {
     this.gestureNext = t + dur + 2.5 + Math.random() * 4
   }
 
-  /** Поворот, при котором девушка смотрит в камеру. */
+  /** Поворот, при котором девушка смотрит в камеру (текущую). */
   private faceCameraYaw(): number {
     const g = this.girl!
-    return Math.atan2(Cctv.CAM.pos[0] - g.position.x, Cctv.CAM.pos[2] - g.position.z)
+    const v = this.view === '05' ? Cctv.CAM05 : Cctv.CAM
+    return Math.atan2(v.pos[0] - g.position.x, v.pos[2] - g.position.z)
   }
 
-  /** Не пускает её сквозь стул: выталкивает точку из круга вокруг сиденья. */
+  /** Не пускает сквозь мебель: стул в комнате 4 или объекты кухни. */
   private avoidChair(x: number, z: number): { x: number; z: number } {
-    const dx = x - CHAIR.x
-    const dz = z - CHAIR.z
-    const d = Math.hypot(dx, dz)
-    if (d >= CHAIR_R || d < 1e-5) return { x, z }
-    const k = CHAIR_R / d
-    return { x: CHAIR.x + dx * k, z: CHAIR.z + dz * k }
+    const obstacles =
+      z < KITCHEN.z1 ? KITCHEN_OBSTACLES : [{ x: CHAIR.x, z: CHAIR.z, r: CHAIR_R }]
+    let px = x
+    let pz = z
+    for (const o of obstacles) {
+      const dx = px - o.x
+      const dz = pz - o.z
+      const d = Math.hypot(dx, dz)
+      if (d >= o.r || d < 1e-5) continue
+      const k = o.r / d
+      px = o.x + dx * k
+      pz = o.z + dz * k
+    }
+    // в кухне не даём пройти сквозь стены
+    if (pz < KITCHEN.z1) {
+      px = clamp(px, KITCHEN.x0 + 0.3, KITCHEN.x1 - 0.3)
+      pz = clamp(pz, KITCHEN.z0 + 0.3, KITCHEN.z1 - 0.1)
+    }
+    return { x: px, z: pz }
   }
 
   /** Игрок дал команду отвязать: она встаёт и начинает пытаться уйти. */
@@ -493,7 +580,8 @@ export class Cctv {
     if (this.state === 'tied') return 0.35 + Math.sin(this.time * 0.7) * 0.08
     if (this.state === 'pace' || this.state === 'idle') return 0.55
     if (this.state === 'knock') return 0.85
-    if (this.state === 'run') return 1
+    if (this.state === 'kitchen') return 0.65 + Math.sin(this.time * 0.5) * 0.06
+    if (this.state === 'run' || this.state === 'toKitchen') return 1
     return 0
   }
 
@@ -530,6 +618,15 @@ export class Cctv {
     if (this.gesture) {
       this.targetX = g.position.x
       this.targetZ = g.position.z
+    }
+
+    // Добежала до темноты коридора — уходит дальше, в кухню (КАМ-04 её теряет).
+    if (this.state === 'run' && g.position.z < -6.9) {
+      this.setState('toKitchen')
+    }
+    // Прошла проём — теперь она на кухне.
+    if (this.state === 'toKitchen' && g.position.z < KITCHEN.z1 - 0.1) {
+      this.setState('kitchen')
     }
 
     // Доворот с ограничением скорости: она не щёлкает на 180° за кадр.
@@ -615,7 +712,11 @@ export class Cctv {
     const nearTarget = Math.hypot(g.position.x - this.targetX, g.position.z - this.targetZ) < 0.3
     const moving =
       !this.gesture &&
-      (this.state === 'pace' || this.state === 'run' || (this.state === 'knock' && !nearTarget))
+      (this.state === 'pace' ||
+        this.state === 'run' ||
+        this.state === 'toKitchen' ||
+        (this.state === 'kitchen' && !nearTarget) ||
+        (this.state === 'knock' && !nearTarget))
     this.moveBlend += ((moving ? 1 : 0) - this.moveBlend) * Math.min(1, dt * 5)
 
     const base = this.mix(SIT, STAND, this.freeT)
@@ -894,6 +995,12 @@ export class Cctv {
   }
 
   /** Дверь открывается — девушка убегает. */
+  /** Отладка для ?kitchen: сразу отвязать и отправить в кухню. */
+  debugToKitchen(): void {
+    this.untie()
+    this.setState('toKitchen')
+  }
+
   release(): void {
     if (this.doorOpen === 0) this.doorOpen = 0.0001
     // жест мог держать её на месте — иначе она зависнет на пороге

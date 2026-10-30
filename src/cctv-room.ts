@@ -17,7 +17,7 @@ export type Room4 = {
 }
 
 /** Canvas-текстура с пиксельной фильтрацией под PS1. */
-function tex(w: number, h: number, draw: (c: CanvasRenderingContext2D) => void): THREE.CanvasTexture {
+export function tex(w: number, h: number, draw: (c: CanvasRenderingContext2D) => void): THREE.CanvasTexture {
   const c = document.createElement('canvas')
   c.width = w
   c.height = h
@@ -34,7 +34,7 @@ function tex(w: number, h: number, draw: (c: CanvasRenderingContext2D) => void):
 const rnd = (a: number, b: number): number => a + Math.random() * (b - a)
 
 /** Бетонная стена: пятна, потёки, трещины, грязный низ. */
-function wallTex(): THREE.CanvasTexture {
+export function wallTex(): THREE.CanvasTexture {
   return tex(128, 128, (c) => {
     c.fillStyle = '#474941'
     c.fillRect(0, 0, 128, 128)
@@ -78,7 +78,7 @@ function wallTex(): THREE.CanvasTexture {
 }
 
 /** Пол: линолеум с рваными пятнами и потёртой тропой посередине. */
-function floorTex(): THREE.CanvasTexture {
+export function floorTex(): THREE.CanvasTexture {
   return tex(128, 128, (c) => {
     c.fillStyle = '#2c2e2a'
     c.fillRect(0, 0, 128, 128)
@@ -287,9 +287,16 @@ export function buildRoom(scene: THREE.Scene, chairX: number, chairZ: number, ch
     scene.add(wall)
   }
 
-  const farWall = new THREE.Mesh(new THREE.BoxGeometry(2.4, 2.4, 0.2), corrWallMat)
-  farWall.position.set(0, 1.2, -9.2)
-  scene.add(farWall)
+  // Торец коридора: слева и справа от проёма в кухню (проём 1.4 по центру —
+  // в него девушка уходит, когда оператор отпирает дверь комнаты 4).
+  for (const sx of [-1, 1]) {
+    const seg = new THREE.Mesh(new THREE.BoxGeometry(0.5, 2.4, 0.2), corrWallMat)
+    seg.position.set(sx * 0.95, 1.2, -9.2)
+    scene.add(seg)
+  }
+  const corrLintel = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.4, 0.2), corrWallMat)
+  corrLintel.position.set(0, 2.2, -9.2)
+  scene.add(corrLintel)
 
   // лампы в потолке: холодный свет, дальняя почти не добивает до двери
   const fixtureMat = new THREE.MeshBasicMaterial({ color: 0xd4e0c6 })
