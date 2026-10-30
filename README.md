@@ -138,9 +138,12 @@ tools/shot.mjs        — скриншот-тест в Edge (только для
 
 ## Деплой на itch.io
 
-1. `npm run build`
+1. `npm run build` — пути в билде относительные (`base: './'` в
+   `vite.config.ts`), так что zip работает на itch как есть
 2. Заархивировать **содержимое** `dist/` в zip (`index.html` в корне архива)
 3. itch.io → проект → Uploads → HTML5 → загрузить zip → «This file will be
    played in the browser»
+4. Проверить собранную версию: `npm run preview` →
+   `node tools/check-pairs.mjs http://127.0.0.1:4173/?ui&cam&kitchen`
 
 Страницу на itch лучше создать в первый же день и залить заглушку.

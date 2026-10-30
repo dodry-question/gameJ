@@ -489,10 +489,20 @@ Heavy Breathing», CC0; луп с рампой громкости 26 с). Кли
 npm install
 npm run dev        # HMR
 npm run typecheck  # tsc --noEmit
-npm run build      # dist/
+npm run build      # dist/ — правильный билд всегда (см. ниже)
 npm run preview
 npm run dev -- --host 127.0.0.1   # если localhost не открывается (IPv6)
 ```
+
+**Билд правильный по умолчанию.** В `vite.config.ts` стоит `base: './'` —
+все пути в `dist/` относительные (`./assets/...`), поэтому собранная игра
+работает на itch.io (HTML5-версия отдаётся из вложенного пути, не из корня)
+и открывается с диска без сервера. В `index.html` favicon тоже относительный.
+Проверка собранной версии целиком: `npm run preview`, затем
+`node tools/check-pairs.mjs http://127.0.0.1:4173/?ui&cam&kitchen` — вся
+цепочка перехвата на прод-бандле. Порог предупреждения о размере чанка
+поднят до 950 КБ: three.js в одном бандле (~860 КБ) — осознанное решение
+для джема.
 
 Деплой на itch.io: `npm run build` → zip **содержимого** `dist/`
 (`index.html` в корне архива) → Uploads → HTML5 → «played in the browser».
@@ -744,3 +754,9 @@ npm run dev -- --host 127.0.0.1   # если localhost не открываетс
   (`breath-man.mp3`, Freesound casiba842, CC0), клик — новая смена.
   Фоновые шины после тишины не оживают (`Sound.deadAir`). Заодно длинные
   заголовки окон и кнопок панели задач обрезаются многоточием (`ellipsis`).
+- **31.10.2026 (правильный билд)** — добавлен `vite.config.ts` с `base: './'`:
+  пути в `dist/` теперь относительные, билд работает на itch.io и открывается
+  с диска; favicon в `index.html` тоже относительный, порог предупреждения о
+  размере чанка поднят под фактические ~860 КБ. Собранная версия проверена
+  целиком: `npm run preview` + `node tools/check-pairs.mjs
+  http://127.0.0.1:4173/?ui&cam&kitchen`.
