@@ -185,6 +185,10 @@ export class Desktop {
   /** Какой файл открыть в окне просмотра при следующем spawn('image'). */
   private pendingImage: string | null = null
 
+  // кухня: пароль, напечатанный с pairs.local, и исход головоломки
+  private printedCode: string | null = null
+  private pairsLostFlag = false
+
   private drag: { win: Win; ox: number; oy: number } | null = null
   /** Протяжка внутри окна: выделение текста в блокноте. */
   private appDrag: Win | null = null
@@ -339,6 +343,8 @@ export class Desktop {
     if (key === 'browser') {
       const browser = new Browser(this.sound)
       browser.onUnlockDoor = () => this.unlockDoor()
+      browser.onPairsFail = () => this.pairsLost()
+      browser.onPrintCode = (code) => this.printCode(code)
       return browser
     }
     if (key === 'mail') return this.getMail()
@@ -1092,8 +1098,32 @@ export class Desktop {
   }
 
   /** Состояние сценария замка — для проверок из tools/. */
-  debugInfo(): { unlockNote: boolean; door: boolean; files: DeskFile[] } {
-    return { unlockNote: this.unlockNoteSent, door: this.doorUnlocked, files: this.explorerFiles() }
+  debugInfo(): {
+    unlockNote: boolean
+    door: boolean
+    files: DeskFile[]
+    printedCode: string | null
+    pairsLost: boolean
+  } {
+    return {
+      unlockNote: this.unlockNoteSent,
+      door: this.doorUnlocked,
+      files: this.explorerFiles(),
+      printedCode: this.printedCode,
+      pairsLost: this.pairsLostFlag,
+    }
+  }
+
+  /** Сайт пар напечатал бумажку: код уходит на принтер в кухне. */
+  private printCode(code: string): void {
+    this.printedCode = code
+    this.dirty = true
+  }
+
+  /** Головоломка-пары проиграна: маньяк проснулся (сцену двигает кухня). */
+  private pairsLost(): void {
+    this.pairsLostFlag = true
+    this.dirty = true
   }
 
   private toastRect(): Rect {

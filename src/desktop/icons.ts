@@ -458,6 +458,83 @@ const ICONS: Record<string, (p: Pix) => void> = {
   map,
   virus,
   image,
+  knife,
+  meat,
+  lamp,
+  key,
+}
+
+/** Нож: лезвие с пропилом и тёмная рукоять. */
+function knife(p: Pix): void {
+  const blade = rgba('#c9ced4')
+  const bladeHi = rgba('#eef2f6')
+  const handle = rgba('#4a3826')
+  p.poly(
+    [
+      [6, 20],
+      [18, 8],
+      [21, 11],
+      [12, 23],
+    ],
+    blade,
+  )
+  p.line(6, 20, 18, 8, bladeHi)
+  p.poly(
+    [
+      [12, 23],
+      [21, 11],
+      [24, 14],
+      [15, 26],
+    ],
+    rgba('#9aa0a8'),
+  )
+  p.rect(14, 24, 12, 5, handle)
+  p.rect(14, 24, 12, 1, rgba('#6a5438'))
+  p.rect(16, 22, 3, 3, rgba('#8f8d80'))
+}
+
+/** Мясо: стейк с прожилкой и косточкой. */
+function meat(p: Pix): void {
+  const flesh = rgba('#b2453a')
+  const fleshHi = rgba('#d4695c')
+  const fat = rgba('#e8d9c8')
+  p.ellipse(15, 17, 11, 8, flesh)
+  p.ellipse(13, 15, 7, 4, fleshHi)
+  p.line(8, 18, 22, 15, fat)
+  p.ellipse(25, 20, 4, 4, fat)
+  p.ellipse(25, 20, 2, 2, rgba('#c9b8a4'))
+}
+
+/** Лампа: провод, конус плафона и жёлтая лампочка. */
+function lamp(p: Pix): void {
+  const wire = rgba('#3a3a34')
+  const shade = rgba('#5c6672')
+  const bulb = rgba('#ffd75e')
+  p.rect(15, 3, 2, 10, wire)
+  p.poly(
+    [
+      [8, 21],
+      [24, 21],
+      [20, 13],
+      [12, 13],
+    ],
+    shade,
+  )
+  p.rect(8, 21, 16, 2, rgba('#39414b'))
+  p.ellipse(16, 25, 4, 4, bulb)
+  p.ellipse(16, 25, 2, 2, rgba('#fff2b8'))
+}
+
+/** Ключ: кольцо, стержень и бородка. */
+function key(p: Pix): void {
+  const metal = rgba('#c9a227')
+  const metalHi = rgba('#e8c85e')
+  p.ring(10, 11, 6, 6, metal, 0.28)
+  p.ring(10, 11, 5, 5, metalHi, 0.12)
+  p.rect(14, 14, 14, 4, metal)
+  p.rect(24, 18, 4, 4, metal)
+  p.rect(20, 18, 3, 3, metal)
+  p.rect(14, 14, 14, 1, metalHi)
 }
 
 /** Фото: рамка с небом, солнцем и горами — файлы картинок. */
