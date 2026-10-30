@@ -66,7 +66,6 @@ const SIZES: Record<string, Rect> = {
 
 const START_ICONS: Array<Omit<DeskIcon, 'x' | 'y'>> = [
   { id: 'mail', label: 'Почта', glyph: 'mail', app: 'mail' },
-  { id: 'map', label: 'Карта', glyph: 'map', app: 'map' },
   { id: 'browser', label: 'Интернет', glyph: 'browser', app: 'browser' },
   { id: 'computer', label: 'Мой компьютер', glyph: 'computer', app: 'computer' },
   { id: 'trash', label: 'Корзина', glyph: 'trash', app: 'trash' },
@@ -74,7 +73,6 @@ const START_ICONS: Array<Omit<DeskIcon, 'x' | 'y'>> = [
 
 const START_MENU: MenuItem[] = [
   { label: 'Почта', key: 'mail' },
-  { label: 'Карта блока C', key: 'map' },
   { label: 'Netscape Navigator', key: 'browser' },
   { label: 'Мой компьютер', key: 'computer' },
   null,
@@ -536,6 +534,15 @@ export class Desktop {
       app: 'camera',
       x: 104,
       y: 8,
+    })
+    // карта наблюдения приезжает тем же архивом
+    this.icons.push({
+      id: 'map',
+      label: 'Карта',
+      glyph: 'map',
+      app: 'map',
+      x: 104,
+      y: 102,
     })
   }
 

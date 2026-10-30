@@ -15,8 +15,11 @@ export class Sound {
   private ambient: AudioBuffer | null = null
   private ambientLoading = false
   private creak: AudioBuffer | null = null
+  private breath: AudioBuffer | null = null
+  private breathLoading = false
   private breathStress: number | null = null
-  private breathTimer = 0
+  private breathSrc: AudioBufferSourceNode | null = null
+  private breathGain: GainNode | null = null
   private started = false
 
   /** Вызывать на первом клике: браузеры не дают создать звук раньше. */
@@ -265,63 +268,74 @@ export class Sound {
   // ── дыхание девушки ──────────────────────────────────────────────
 
   /**
-   * Дыхание из динамиков монитора: слышно, пока открыта камера. Чем больше
-   * стресс, тем чаще и громче. null — девушка вне кадра, тишина.
+   * Реальная запись испуганного дыхания (Freesound, Aquillx «Scared
+   * Breathing», CC BY 4.0), лупится из динамиков монитора, пока открыта
+   * камера. Стресс рулит громкостью и темпом воспроизведения. null — тишина.
    */
   setBreathing(stress: number | null): void {
-    if (stress === null) {
-      this.breathStress = null
-      return
-    }
-    if (this.breathStress === null) {
-      this.breathStress = stress
-      this.scheduleBreath(0.3)
-      return
-    }
     this.breathStress = stress
-  }
-
-  private scheduleBreath(delaySec: number): void {
-    window.clearTimeout(this.breathTimer)
-    this.breathTimer = window.setTimeout(() => {
-      const s = this.breathStress
-      if (s === null || !this.ctx) return
-      this.playBreath(s)
-      this.scheduleBreath(3.6 - s * 1.9) // 3.6 c покоя → 1.7 c паники
-    }, delaySec * 1000)
-  }
-
-  private playBreath(stress: number): void {
-    const gain = 0.03 + stress * 0.1
-    this.breathNoise(920, 0.42, gain * 0.8, 0)
-    this.breathNoise(600, 0.95, gain, 0.52)
-    if (stress > 0.75) this.breathNoise(1250, 0.3, gain * 0.5, 1.58)
-  }
-
-  /** Один вдох или выдох: шум через беговой полосовой фильтр. */
-  private breathNoise(freq: number, dur: number, gain: number, when: number): void {
     const ctx = this.ctx
-    const out = this.master
-    if (!ctx || !out || !this.noise) return
-    const t = ctx.currentTime + when
-    const src = ctx.createBufferSource()
-    src.buffer = this.noise
-    src.loop = true
-    const bp = ctx.createBiquadFilter()
-    bp.type = 'bandpass'
-    bp.frequency.setValueAtTime(freq * 0.8, t)
-    bp.frequency.linearRampToValueAtTime(freq * 1.15, t + dur)
-    bp.Q.value = 1.4
-    const hp = ctx.createBiquadFilter()
-    hp.type = 'highpass'
-    hp.frequency.value = 320
-    const env = ctx.createGain()
-    env.gain.setValueAtTime(0.0001, t)
-    env.gain.linearRampToValueAtTime(gain, t + dur * 0.35)
-    env.gain.exponentialRampToValueAtTime(0.0001, t + dur)
-    src.connect(hp).connect(bp).connect(env).connect(out)
-    src.start(t)
-    src.stop(t + dur + 0.05)
+    if (!ctx) return
+    const t = ctx.currentTime
+
+    if (stress === null) {
+      if (this.breathSrc && this.breathGain) {
+        const g = this.breathGain
+        const src = this.breathSrc
+        g.gain.cancelScheduledValues(t)
+        g.gain.setValueAtTime(Math.max(g.gain.value, 0.0001), t)
+        g.gain.linearRampToValueAtTime(0.0001, t + 0.6)
+        window.setTimeout(() => {
+          try {
+            src.stop()
+          } catch {
+            /* уже остановлен */
+          }
+        }, 700)
+      }
+      this.breathSrc = null
+      this.breathGain = null
+      return
+    }
+
+    if (!this.breathSrc) {
+      if (!this.breath) {
+        this.loadBreath()
+        return
+      }
+      const src = ctx.createBufferSource()
+      src.buffer = this.breath
+      src.loop = true
+      const g = ctx.createGain()
+      g.gain.value = 0.0001
+      src.connect(g).connect(this.master!)
+      src.start(t)
+      this.breathSrc = src
+      this.breathGain = g
+    }
+
+    const g = this.breathGain!
+    g.gain.cancelScheduledValues(t)
+    g.gain.setValueAtTime(Math.max(g.gain.value, 0.0001), t)
+    g.gain.linearRampToValueAtTime(0.05 + stress * 0.13, t + 0.8)
+    this.breathSrc!.playbackRate.value = 0.92 + stress * 0.28
+  }
+
+  private loadBreath(): void {
+    const ctx = this.ctx
+    if (!ctx || this.breath || this.breathLoading) return
+    this.breathLoading = true
+    fetch('sounds/breath.mp3')
+      .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error('нет файла'))))
+      .then((b) => ctx.decodeAudioData(b))
+      .then((buf) => {
+        this.breath = buf
+        // к моменту загрузки камера могла уже открыться — запускаем сразу
+        if (this.breathStress !== null) this.setBreathing(this.breathStress)
+      })
+      .catch(() => {
+        this.breathLoading = false
+      })
   }
 
   // ── скрип пола за спиной ─────────────────────────────────────────
@@ -335,7 +349,7 @@ export class Sound {
   private loadCreak(): void {
     const ctx = this.ctx
     if (!ctx || this.creak) return
-    fetch('sounds/creak.ogg')
+    fetch('sounds/creak.mp3')
       .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error('нет файла'))))
       .then((b) => ctx.decodeAudioData(b))
       .then((buf) => {
@@ -357,8 +371,23 @@ export class Sound {
     const ctx = this.ctx
     const out = this.master
     if (!ctx || !out || !this.creak) return
+    this.playOneCreak()
+    // иногда скрипнет пару раз подряд, как человек, переступающий с ноги на ногу
+    if (Math.random() < 0.45) {
+      const src2 = ctx.createBufferSource()
+      src2.buffer = this.creak
+      void src2
+      window.setTimeout(() => this.playOneCreak(0.7 + Math.random() * 0.6), 900)
+    }
+  }
+
+  private playOneCreak(when = 0): void {
+    const ctx = this.ctx
+    const out = this.master
+    if (!ctx || !out || !this.creak) return
     const src = ctx.createBufferSource()
     src.buffer = this.creak
+    src.playbackRate.value = 0.9 + Math.random() * 0.25
     const panner = ctx.createPanner()
     panner.panningModel = 'HRTF'
     panner.refDistance = 1
@@ -371,11 +400,12 @@ export class Sound {
       panner.setPosition(0.5, -0.3, 2.2)
     }
     const env = ctx.createGain()
-    const t = ctx.currentTime
+    const t = ctx.currentTime + when
+    const dur = this.creak.duration / src.playbackRate.value
     env.gain.setValueAtTime(0.0001, t)
-    env.gain.linearRampToValueAtTime(0.4, t + 0.7)
-    env.gain.setValueAtTime(0.4, t + Math.max(0.9, this.creak.duration - 1))
-    env.gain.linearRampToValueAtTime(0.0001, t + this.creak.duration)
+    env.gain.linearRampToValueAtTime(0.4, t + 0.05)
+    env.gain.setValueAtTime(0.4, t + dur - 0.15)
+    env.gain.linearRampToValueAtTime(0.0001, t + dur)
     src.connect(panner).connect(env).connect(out)
     src.start(t)
   }
