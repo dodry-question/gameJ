@@ -11,8 +11,23 @@ import { GAME } from './config'
 import { Room } from './scene'
 import { Desktop, DESKTOP_H, DESKTOP_W } from './desktop/desktop'
 import { Sound } from './audio'
+import { drawIcon } from './desktop/icons'
 
 document.title = `${GAME.title} — ${GAME.tagline}`
+
+// Фавиконка — тот же пиксельный значок tds.exe (вирус-тыква), что на столе.
+{
+  const fav = document.querySelector<HTMLLinkElement>('#favicon')
+  const c = document.createElement('canvas')
+  c.width = 32
+  c.height = 32
+  const ctx = c.getContext('2d')
+  if (fav && ctx) {
+    drawIcon(ctx, 'virus', 16, 16, 1)
+    fav.type = 'image/png'
+    fav.href = c.toDataURL('image/png')
+  }
+}
 
 const found = document.querySelector<HTMLDivElement>('#app')
 if (!found) throw new Error('#app не найден в index.html')

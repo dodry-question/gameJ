@@ -159,7 +159,7 @@ export class Cctv {
   private task: {
     id: string
     action: string
-    phase: 'walk' | 'act'
+    phase: 'wait' | 'walk' | 'act'
     fired: boolean
   } | null = null
   private taskT = 0
@@ -564,6 +564,13 @@ export class Cctv {
     // Жест важнее сценария: пока она машет или оглядывается, не дёргаем её к двери.
     if (this.gesture) return
     if (this.state === 'pace' || this.state === 'idle' || this.state === 'knock') {
+      // первые 20 секунд после отвязки — только дверь: бежит и стучит,
+      // махать камере начинает потом
+      const since = this.time - this.freedAt
+      if (since < 20) {
+        this.setState('knock')
+        return
+      }
       const cycle = (this.time - this.freedAt) % 12
       if (cycle < 7) this.setState('pace')
       else if (cycle < 11) this.setState('knock')
@@ -616,6 +623,8 @@ export class Cctv {
   private gestures(): void {
     const t = this.time
     if (this.task || this.attackT >= 0) return // занята поручением или случилось худшее
+    // только что отвязали — ей не до жестов: бежит к двери
+    if (this.time - this.freedAt < 20) return
     if (this.gesture) {
       if (t - this.gesture.start > this.gesture.dur) {
         this.gesture = null
@@ -664,11 +673,11 @@ export class Cctv {
     return { x: px, z: pz }
   }
 
-  /** Игрок дал команду отвязать: она встаёт и начинает пытаться уйти. */
+  /** Игрок дал команду отвязать: она сразу бежит к двери и стучит. */
   untie(): void {
     if (this.state === 'tied') {
       this.freedAt = this.time
-      this.setState('pace')
+      this.setState('knock')
     }
   }
 
@@ -1220,6 +1229,15 @@ export class Cctv {
     // новая печать отменяет старую бумажку: печатать можно сколько угодно
     this.flags.hasPaper = false
     this.kitchen.startPrint()
+    // она слышит принтер и сразу идёт за листом, как только он выйдет
+    if (this.state === 'kitchen' && !this.flags.leaving && this.attackT < 0) {
+      this.gesture = null
+      this.task = { id: 'printer', action: 'takePaper', phase: 'wait', fired: false }
+      if (this.girl) {
+        this.targetX = this.girl.position.x
+        this.targetZ = this.girl.position.z
+      }
+    }
   }
 
   /** Провал головоломки: маньяк бросается из проёма. */
@@ -1270,6 +1288,18 @@ export class Cctv {
     const obj = this.kitchen.objects.find((o) => o.id === t.id)
     if (!obj) {
       this.task = null
+      return
+    }
+
+    if (t.phase === 'wait') {
+      // ждём, пока лист вылезет из принтера (звук и диод уже работают)
+      if (this.kitchen.paperReady) {
+        t.phase = 'walk'
+        const obj = this.kitchen.objects.find((o) => o.id === t.id)!
+        this.targetX = obj.stand[0]
+        this.targetZ = obj.stand[1]
+        this.yawTarget = Math.atan2(obj.stand[0] - g.position.x, obj.stand[1] - g.position.z)
+      }
       return
     }
 
