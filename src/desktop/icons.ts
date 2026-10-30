@@ -462,6 +462,21 @@ const ICONS: Record<string, (p: Pix) => void> = {
   meat,
   lamp,
   key,
+  music,
+}
+
+/** Нота: музыкальные файлы. */
+function music(p: Pix): void {
+  const note = rgba('#1c1c16')
+  const noteHi = rgba('#3a3a30')
+  p.ellipse(10, 24, 5, 4, note)
+  p.ellipse(10, 24, 2, 1.5, noteHi)
+  p.ellipse(22, 21, 5, 4, note)
+  p.ellipse(22, 21, 2, 1.5, noteHi)
+  p.rect(13, 8, 2, 16, note)
+  p.rect(25, 5, 2, 16, note)
+  p.rect(13, 5, 14, 3, note)
+  p.rect(13, 5, 14, 1, noteHi)
 }
 
 /** Нож: лезвие с пропилом и тёмная рукоять. */

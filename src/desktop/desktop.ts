@@ -1067,12 +1067,17 @@ export class Desktop {
     else if (file.kind === 'image') {
       this.pendingImage = file.name
       this.open('image')
+    } else if (file.kind === 'audio') {
+      // пасхалка: песенка играет один раз, без зацикливания
+      this.sound.playSong()
+      this.dirty = true
     } else this.open('tds')
   }
 
   /** Содержимое папок «Мой компьютер»: растёт по ходу игры. */
   private explorerFiles(): DeskFile[] {
     const files: DeskFile[] = [
+      { folder: 'Музыка', name: 'песенка для малыша.ogg', kind: 'audio' },
       { folder: 'Изображения', name: 'dodry.jpg', kind: 'image' },
       { folder: 'Изображения', name: 'avizero.jpg', kind: 'image' },
       { folder: 'Изображения', name: 'Иларион.jpg', kind: 'image' },

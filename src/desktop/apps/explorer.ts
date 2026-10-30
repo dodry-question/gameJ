@@ -14,10 +14,10 @@ import { drawIcon } from '../icons'
 export type DeskFile = {
   folder: string
   name: string
-  kind: 'txt' | 'exe' | 'image'
+  kind: 'txt' | 'exe' | 'image' | 'audio'
 }
 
-type Node = { name: string; kind: 'folder' | 'txt' | 'exe' | 'image'; file?: DeskFile }
+type Node = { name: string; kind: 'folder' | 'txt' | 'exe' | 'image' | 'audio'; file?: DeskFile }
 
 const FOLDERS = ['Загрузки', 'Документы', 'Музыка', 'Изображения', 'Видео']
 
@@ -26,6 +26,7 @@ const GLYPH: Record<Node['kind'], string> = {
   txt: 'file',
   exe: 'virus',
   image: 'image',
+  audio: 'music',
 }
 
 type Hit = { r: Rect; fn: () => void }
@@ -69,6 +70,15 @@ export class Explorer implements App {
     fill(ctx, status, C.face)
     bevel(ctx, status, false, 1)
     const count = this.items.length
+    // играет пасхалка или нет — видно прямо в статусе
+    const right = this.sound.songPlaying ? '♪ играет: песенка для малыша.ogg' : ''
+    if (right) {
+      text(ctx, right, status.x + status.w - 8, status.y + status.h / 2, {
+        size: 10,
+        color: C.textDim,
+        align: 'right',
+      })
+    }
     text(
       ctx,
       this.path.length ? (count ? `Объектов: ${count}` : 'Папка пуста') : `Объектов: ${count}`,

@@ -364,6 +364,105 @@ export class Sound {
     this.tone(220, 0.8, 'sawtooth', 0.05, 38)
   }
 
+  // ── пасхалка «Музыка» ────────────────────────────────────────────
+
+  private song: AudioBuffer | null = null
+  private songLoading = false
+  private songSrc: AudioBufferSourceNode | null = null
+
+  /**
+   * Песенка-пасхалка из папки «Музыка»: играет один раз, без зацикливания.
+   * Повторный клик — начинает сначала.
+   */
+  playSong(): void {
+    const ctx = this.ctx
+    const out = this.master
+    if (!ctx || !out) return
+    if (!this.song) {
+      if (this.songLoading) return
+      this.songLoading = true
+      fetch('sounds/' + encodeURIComponent('песенка для малыша.ogg'))
+        .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error('нет файла'))))
+        .then((b) => ctx.decodeAudioData(b))
+        .then((buf) => {
+          this.song = buf
+          this.songLoading = false
+          this.playSong()
+        })
+        .catch(() => {
+          this.songLoading = false
+        })
+      return
+    }
+    // предыдущий запуск глушим: «перематываем» на начало
+    if (this.songSrc) {
+      try {
+        this.songSrc.stop()
+      } catch {
+        /* уже закончилась */
+      }
+      this.songSrc = null
+    }
+    const src = ctx.createBufferSource()
+    src.buffer = this.song
+    src.loop = false // пасхалка играет ровно один раз
+    const g = ctx.createGain()
+    const t = ctx.currentTime
+    g.gain.setValueAtTime(0.0001, t)
+    g.gain.linearRampToValueAtTime(0.55, t + 0.3)
+    g.gain.setValueAtTime(0.55, t + Math.max(0.5, this.song.duration - 1.2))
+    g.gain.linearRampToValueAtTime(0.0001, t + this.song.duration)
+    src.connect(g).connect(out)
+    src.start(t)
+    this.songSrc = src
+    src.onended = () => {
+      this.songSrc = null
+    }
+  }
+
+  get songPlaying(): boolean {
+    return this.songSrc !== null
+  }
+
+  private murzik: AudioBuffer | null = null
+  private murzikLoading = false
+
+  /**
+   * «Мурзик» — музыка, включающаяся в момент нападения маньяка (провал
+   * головоломки-пар). Играет один раз, загружается лениво при первом вызове.
+   */
+  playMurzik(): void {
+    const ctx = this.ctx
+    const out = this.master
+    if (!ctx || !out) return
+    if (!this.murzik) {
+      if (this.murzikLoading) return
+      this.murzikLoading = true
+      fetch('sounds/' + encodeURIComponent('мурзик.ogg'))
+        .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error('нет файла'))))
+        .then((b) => ctx.decodeAudioData(b))
+        .then((buf) => {
+          this.murzik = buf
+          this.murzikLoading = false
+          this.playMurzik()
+        })
+        .catch(() => {
+          this.murzikLoading = false
+        })
+      return
+    }
+    const src = ctx.createBufferSource()
+    src.buffer = this.murzik
+    src.loop = false
+    const g = ctx.createGain()
+    const t = ctx.currentTime
+    // громче прочих звуков компьютера: это кульминация провала
+    g.gain.setValueAtTime(0.0001, t)
+    g.gain.linearRampToValueAtTime(0.85, t + 0.15)
+    src.connect(g).connect(out)
+    src.start(t)
+  }
+
   // ── модем ────────────────────────────────────────────────────────
 
   /**
