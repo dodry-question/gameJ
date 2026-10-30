@@ -1,7 +1,8 @@
 /**
  * Комната 4 в кадре КАМ-04: бетонные стены, дверь и следы того, что девушка
  * здесь давно и в беде — засечки дней на стене, царапины на двери, обрывки
- * верёвки, вещи, матрас. Всё — примитивы и canvas-текстуры, никакого ассет-пака.
+ * верёвки, вещи, матрас. За дверью — коридор, в котором она скрывается.
+ * Всё — примитивы и canvas-текстуры, никакого ассет-пака.
  */
 import * as THREE from 'three'
 
@@ -240,9 +241,18 @@ export function buildRoom(scene: THREE.Scene, chairX: number, chairZ: number, ch
   ceiling.position.set(0, 3, -0.5)
   scene.add(ceiling)
 
-  const back = new THREE.Mesh(new THREE.BoxGeometry(6, 3, 0.2), wallMat)
-  back.position.set(0, 1.5, -3)
-  scene.add(back)
+  // Задняя стена с проёмом под дверь: две глухие части и перемычка сверху.
+  for (const [x, w] of [
+    [-1.8, 2.4],
+    [1.8, 2.4],
+  ] as const) {
+    const part = new THREE.Mesh(new THREE.BoxGeometry(w, 3, 0.2), wallMat)
+    part.position.set(x, 1.5, -3)
+    scene.add(part)
+  }
+  const lintel = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.8, 0.2), wallMat)
+  lintel.position.set(0, 2.6, -3)
+  scene.add(lintel)
 
   const left = new THREE.Mesh(new THREE.BoxGeometry(0.2, 3, 5), wallMat)
   left.position.set(-3, 1.5, -0.5)
@@ -251,6 +261,70 @@ export function buildRoom(scene: THREE.Scene, chairX: number, chairZ: number, ch
   const right = new THREE.Mesh(new THREE.BoxGeometry(0.2, 3, 5), wallMat)
   right.position.set(3, 1.5, -0.5)
   scene.add(right)
+
+  // ── коридор за дверью: бетон, редкие лампы, чужие двери ──────────────
+  const corrWallMat = new THREE.MeshLambertMaterial({ map: wallTex(), color: 0xa8a89e })
+  corrWallMat.map!.repeat.set(3, 1)
+  const corrFloorMat = new THREE.MeshLambertMaterial({ map: floorTex() })
+  corrFloorMat.map!.repeat.set(2, 6)
+
+  const corrFloor = new THREE.Mesh(new THREE.PlaneGeometry(2.2, 6.2), corrFloorMat)
+  corrFloor.rotation.x = -Math.PI / 2
+  corrFloor.position.set(0, 0, -6.1)
+  scene.add(corrFloor)
+
+  const corrCeil = new THREE.Mesh(new THREE.PlaneGeometry(2.2, 6.2), darkMat)
+  corrCeil.rotation.x = Math.PI / 2
+  corrCeil.position.set(0, 2.4, -6.1)
+  scene.add(corrCeil)
+
+  for (const sx of [-1, 1]) {
+    const wall = new THREE.Mesh(new THREE.BoxGeometry(0.2, 2.4, 6.2), corrWallMat)
+    wall.position.set(sx * 1.1, 1.2, -6.1)
+    scene.add(wall)
+  }
+
+  const farWall = new THREE.Mesh(new THREE.BoxGeometry(2.4, 2.4, 0.2), corrWallMat)
+  farWall.position.set(0, 1.2, -9.2)
+  scene.add(farWall)
+
+  // лампы в потолке: холодный свет, дальняя почти не добивает до двери
+  const fixtureMat = new THREE.MeshBasicMaterial({ color: 0xd4e0c6 })
+  for (const z of [-4.1, -6.2, -8.3]) {
+    const fixture = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.04, 0.14), fixtureMat)
+    fixture.position.set(0, 2.375, z)
+    scene.add(fixture)
+    const light = new THREE.PointLight(0xb9c8a8, 6, 4.6, 2)
+    light.position.set(0, 2.2, z)
+    scene.add(light)
+  }
+
+  // чужие двери в стенах коридора: закрыты, с ручкой
+  const sideDoorMat = new THREE.MeshLambertMaterial({ color: 0x2e2820 })
+  const handleMat = new THREE.MeshLambertMaterial({ color: 0x6a675c })
+  for (const [sx, z] of [
+    [1, -5.1],
+    [-1, -7.2],
+  ] as const) {
+    const leaf = new THREE.Mesh(new THREE.BoxGeometry(0.06, 2, 0.9), sideDoorMat)
+    leaf.position.set(sx * 0.96, 1, z)
+    scene.add(leaf)
+    const handle = new THREE.Mesh(new THREE.SphereGeometry(0.035, 6, 5), handleMat)
+    handle.position.set(sx * 0.91, 1.02, z + 0.34)
+    scene.add(handle)
+  }
+
+  // труба вдоль потолка и кабель по стене — коридор жилой, но давно брошен
+  const corrPipeMat = new THREE.MeshLambertMaterial({ color: 0x3b3d36 })
+  const corrPipe = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 6, 6), corrPipeMat)
+  corrPipe.rotation.x = Math.PI / 2
+  corrPipe.position.set(-0.92, 2.18, -6.1)
+  scene.add(corrPipe)
+  const cable = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.015, 6, 4), corrPipeMat)
+  cable.rotation.x = Math.PI / 2
+  cable.position.set(0.95, 1.9, -6.1)
+  scene.add(cable)
+
 
   // ── дверь: доски, царапины, замочная накладка ────────────────────────
   const doorPivot = new THREE.Group()
@@ -263,10 +337,16 @@ export function buildRoom(scene: THREE.Scene, chairX: number, chairZ: number, ch
   doorPivot.add(door)
   scene.add(doorPivot)
 
-  // проём: тёмный прямоугольник за дверью
-  const hole = new THREE.Mesh(new THREE.PlaneGeometry(1.2, 2.2), new THREE.MeshBasicMaterial({ color: 0x020304 }))
-  hole.position.set(0, 1.1, -2.95)
-  scene.add(hole)
+  // наличник: закрывает стык двери со стеной и читается как настоящий проём
+  const frameMat = new THREE.MeshLambertMaterial({ color: 0x392d21 })
+  for (const sx of [-1, 1]) {
+    const jamb = new THREE.Mesh(new THREE.BoxGeometry(0.09, 2.26, 0.18), frameMat)
+    jamb.position.set(sx * 0.645, 1.13, -2.89)
+    scene.add(jamb)
+  }
+  const head = new THREE.Mesh(new THREE.BoxGeometry(1.38, 0.09, 0.18), frameMat)
+  head.position.set(0, 2.245, -2.89)
+  scene.add(head)
 
   // ── труба и лампа (вторая половина трубки мертва) ────────────────────
   const pipe = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 5.6, 6), darkMat)

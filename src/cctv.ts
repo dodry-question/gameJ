@@ -32,14 +32,18 @@ const H = 240
  */
 type Pose = Record<string, [number, number, number]>
 
-/** Сидя на стуле: бёдра вперёд, колени вниз, руки связаны и лежат на коленях. */
+/**
+ * Сидя на стуле: бёдра вперёд, колени вниз, связанные кисти лежат на коленях.
+ * Углы подобраны численно (tools/pose-search.mjs): кисти над бёдрами, локти
+ * снаружи торса — руки не входят в тело.
+ */
 const SIT: Pose = {
   Spine: [0.14, 0.02, 0],
   Head: [0.06, 0, 0],
-  LeftArm: [-0.48, 0.06, -1.3],
-  RightArm: [-0.48, -0.06, 1.3],
-  LeftForeArm: [-0.5, 0.12, 0],
-  RightForeArm: [-0.5, -0.12, 0],
+  LeftArm: [-0.5, 0.3, -0.35],
+  RightArm: [-0.5, -0.3, 0.35],
+  LeftForeArm: [-0.7, -0.7, 0],
+  RightForeArm: [-0.7, 0.7, 0],
   LeftUpLeg: [-1.45, 0.1, 0.06],
   RightUpLeg: [-1.45, -0.1, -0.06],
   LeftLeg: [1.35, 0, 0],
@@ -48,12 +52,12 @@ const SIT: Pose = {
   RightFoot: [0.1, 0, 0],
 }
 
-/** Стоя, руки опущены. */
+/** Стоя: руки свободно висят вдоль тела, чуть в стороны. */
 const STAND: Pose = {
   Spine: [0.05, 0, 0],
   Head: [0, 0, 0],
-  LeftArm: [0, 0, -1.42],
-  RightArm: [0, 0, 1.42],
+  LeftArm: [0, 0, 0.08],
+  RightArm: [0, 0, -0.08],
   LeftForeArm: [-0.18, 0, 0],
   RightForeArm: [-0.18, 0, 0],
   LeftUpLeg: [0, 0.02, 0.02],
@@ -69,8 +73,13 @@ const CHAIR = { x: -0.6, z: -0.9 }
 /** Сидя она смотрит ОТ двери — в камеру: видно лицо и страх. */
 const CHAIR_YAW = 0.15
 const SIT_Y = -0.42
+/** Насколько вперёд из стула она выходит, пока встаёт: иначе ноги проходят сквозь сиденье. */
+const RISE_STEP = 0.46
 
 const clamp = (v: number, a: number, b: number): number => Math.min(b, Math.max(a, v))
+
+/** Плавное начало и конец: без рывка на старте и без «щелчка» в конце. */
+const smooth = (v: number): number => v * v * (3 - 2 * v)
 
 export class Cctv {
   readonly canvas: HTMLCanvasElement
@@ -118,6 +127,10 @@ export class Cctv {
   private gazeTarget = { x: 0, y: 0 }
   private gaze = { x: 0, y: 0 }
   private gazeNext = 2
+  /** Случайный «живой» жест: оглянулась, помахала камере, поёжилась. */
+  private gesture: { kind: 'look' | 'wave' | 'shiver' | 'fidget'; start: number; dur: number; side: number } | null =
+    null
+  private gestureNext = 7
   private euler = new THREE.Euler()
   private delta = new THREE.Quaternion()
   private deltaWorld = new THREE.Quaternion()
@@ -280,9 +293,9 @@ export class Cctv {
       this.targetZ = -2.35
       this.yawTarget = Math.PI
     } else if (state === 'run') {
-      // дверь открыта — бежит в проём и дальше, в темноту
+      // дверь открыта — бежит по коридору, пока не скроется в темноте
       this.targetX = 0
-      this.targetZ = -3.6
+      this.targetZ = -8.4
       this.yawTarget = Math.PI
     } else if (state === 'pace') {
       // бродит перед стулом, не задевая его
@@ -381,6 +394,7 @@ export class Cctv {
 
     if (this.girl) {
       this.narrative()
+      this.gestures()
       this.move(dt)
       this.animate(dt)
     }
@@ -403,12 +417,44 @@ export class Cctv {
 
   /** Сценарий: привязана, пока игрок не отвяжет; после — бродит и стучит. */
   private narrative(): void {
+    // Жест важнее сценария: пока она машет или оглядывается, не дёргаем её к двери.
+    if (this.gesture) return
     if (this.state === 'pace' || this.state === 'idle' || this.state === 'knock') {
       const cycle = (this.time - this.freedAt) % 12
       if (cycle < 7) this.setState('pace')
       else if (cycle < 11) this.setState('knock')
       else this.setState('idle')
     }
+  }
+
+  /**
+   * Раз в несколько секунд она делает что-то «своё»: оглядывается по сторонам,
+   * останавливается и машет камере, поёживается. Без этого она просто ходит
+   * туда-сюда и выглядит как робот.
+   */
+  private gestures(): void {
+    const t = this.time
+    if (this.gesture) {
+      if (t - this.gesture.start > this.gesture.dur) {
+        this.gesture = null
+        this.gestureNext = t + 3 + Math.random() * 4.5
+      }
+      return
+    }
+    if (this.freeT < 1 || (this.state !== 'pace' && this.state !== 'idle')) return
+    if (t < this.gestureNext) return
+
+    const r = Math.random()
+    const kind = r < 0.34 ? 'look' : r < 0.62 ? 'wave' : r < 0.82 ? 'shiver' : 'fidget'
+    const dur = kind === 'wave' ? 3.8 : kind === 'look' ? 2.4 : kind === 'shiver' ? 1.7 : 2.1
+    this.gesture = { kind, start: t, dur, side: Math.random() < 0.5 ? -1 : 1 }
+    this.gestureNext = t + dur + 2.5 + Math.random() * 4
+  }
+
+  /** Поворот, при котором девушка смотрит в камеру. */
+  private faceCameraYaw(): number {
+    const g = this.girl!
+    return Math.atan2(Cctv.CAM.pos[0] - g.position.x, Cctv.CAM.pos[2] - g.position.z)
   }
 
   /** Игрок дал команду отвязать: она встаёт и начинает пытаться уйти. */
@@ -442,23 +488,54 @@ export class Cctv {
       this.freeT = 0
       return
     }
-    this.freeT = Math.min(1, this.freeT + dt * 0.9)
 
-    const k = Math.min(1, dt * 1.6)
-    g.position.x += (this.targetX - g.position.x) * k
-    g.position.z += (this.targetZ - g.position.z) * k
+    // Подъём со стула — по сценарию, а не лерпом к цели: она подаётся вперёд
+    // и выходит из стула, иначе ноги проходят сквозь сиденье.
+    if (this.freeT < 1) {
+      this.freeT = Math.min(1, this.freeT + dt * 0.85)
+      const step = RISE_STEP * smooth(this.freeT)
+      g.position.x = CHAIR.x + Math.sin(CHAIR_YAW) * step
+      g.position.z = CHAIR.z + Math.cos(CHAIR_YAW) * step
+      this.prev.set(g.position.x, 0, g.position.z)
+      this.phase = 0
+      this.yaw = this.yawTarget = CHAIR_YAW
+      g.rotation.y = this.yaw
+      return
+    }
+
+    // Жест на месте: останавливается, чтобы оглянуться или помахать.
+    if (this.gesture) {
+      this.targetX = g.position.x
+      this.targetZ = g.position.z
+    }
+
+    // Доворот с ограничением скорости: она не щёлкает на 180° за кадр.
+    let d = (this.yawTarget - this.yaw) % (Math.PI * 2)
+    if (d > Math.PI) d -= Math.PI * 2
+    if (d < -Math.PI) d += Math.PI * 2
+    const turnStep = clamp(d, -2.4 * dt, 2.4 * dt)
+    this.yaw += turnStep
+    this.yawDelta = turnStep
+    g.rotation.y = this.yaw
+
+    // Пока корпус не довернулся, почти не идёт: иначе получается бег боком.
+    const facing = Math.max(0, Math.cos(d))
+    const k = Math.min(1, dt * 2.2 * (0.12 + 0.88 * facing * facing))
+    // скорость ограничена: до далёкой цели она идёт/бежит, а не телепортится
+    let vx = (this.targetX - g.position.x) * k
+    let vz = (this.targetZ - g.position.z) * k
+    const step = Math.hypot(vx, vz)
+    const maxStep = (this.state === 'run' ? 3.4 : 2.4) * dt
+    if (step > maxStep) {
+      vx *= maxStep / step
+      vz *= maxStep / step
+    }
+    g.position.x += vx
+    g.position.z += vz
     // шаги совпадают с пройденным путём, а не с временем
     const moved = Math.hypot(g.position.x - this.prev.x, g.position.z - this.prev.z)
     this.phase += moved * 4.6
     this.prev.set(g.position.x, 0, g.position.z)
-
-    // поворот к цели по кратчайшей дуге; скорость доворота — для крена в повороте
-    let d = (this.yawTarget - this.yaw) % (Math.PI * 2)
-    if (d > Math.PI) d -= Math.PI * 2
-    if (d < -Math.PI) d += Math.PI * 2
-    this.yawDelta = d * Math.min(1, dt * 5)
-    this.yaw += this.yawDelta
-    g.rotation.y = this.yaw
   }
 
   private animate(dt: number): void {
@@ -492,21 +569,30 @@ export class Cctv {
       return
     }
 
-    // вставание со стула: смесь сидячей и стоячей позы
+    // Вставание: смесь сидячей и стоячей позы, наклон вперёд и упор руками
+    // в колени — так подъём читается как усилие, а не как всплытие.
+    if (this.freeT < 1) {
+      const riseBase = this.mix(SIT, STAND, this.freeT)
+      const push = Math.sin(this.freeT * Math.PI)
+      this.add(riseBase, 'Spine', push * 0.5, 0, 0)
+      this.add(riseBase, 'Head', -push * 0.18, 0, 0)
+      this.add(riseBase, 'LeftForeArm', push * 0.45, 0, 0)
+      this.add(riseBase, 'RightForeArm', push * 0.45, 0, 0)
+      this.add(riseBase, 'LeftUpLeg', push * 0.12, 0, 0)
+      this.add(riseBase, 'RightUpLeg', push * 0.12, 0, 0)
+      this.tremor(riseBase, t, stress)
+      this.applyPose(riseBase)
+      this.updateWristRopes()
+      return
+    }
+
     const nearTarget = Math.hypot(g.position.x - this.targetX, g.position.z - this.targetZ) < 0.3
     const moving =
-      this.state === 'pace' || this.state === 'run' || (this.state === 'knock' && !nearTarget)
-    this.moveBlend += ((moving && this.freeT >= 1 ? 1 : 0) - this.moveBlend) * Math.min(1, dt * 5)
+      !this.gesture &&
+      (this.state === 'pace' || this.state === 'run' || (this.state === 'knock' && !nearTarget))
+    this.moveBlend += ((moving ? 1 : 0) - this.moveBlend) * Math.min(1, dt * 5)
 
     const base = this.mix(SIT, STAND, this.freeT)
-
-    // подъём: в середине она опирается руками о колени и сгибается вперёд
-    const rise = Math.sin(this.freeT * Math.PI)
-    this.add(base, 'Spine', rise * 0.45, 0, 0)
-    this.add(base, 'LeftArm', -rise * 0.35, 0, 0)
-    this.add(base, 'RightArm', -rise * 0.35, 0, 0)
-    this.add(base, 'LeftForeArm', -rise * 0.35, 0, 0)
-    this.add(base, 'RightForeArm', -rise * 0.35, 0, 0)
 
     if (moving) {
       this.walkPose(base, t)
@@ -569,11 +655,11 @@ export class Cctv {
     p.RightFoot = [0.1 + Math.sin(w * 1.7 + 1.9) * 0.07, 0, 0]
 
     // руки связаны перед собой: лежат на коленях, в рывке тянутся вперёд-вверх
-    const armX = -0.48 - pull * 0.55 + Math.sin(w * 1.3) * 0.05
-    p.LeftArm = [armX, 0.06, -1.3 + pull * 0.5]
-    p.RightArm = [armX, -0.06, 1.3 - pull * 0.5]
-    p.LeftForeArm = [-0.5 - pull * 0.5, 0.12, 0]
-    p.RightForeArm = [-0.5 - pull * 0.5, -0.12, 0]
+    const armX = -0.5 - pull * 0.4 + Math.sin(w * 1.3) * 0.04
+    p.LeftArm = [armX, 0.3, -0.35 - pull * 0.1]
+    p.RightArm = [armX, -0.3, 0.35 + pull * 0.1]
+    p.LeftForeArm = [-0.7 - pull * 0.3, -0.7, 0]
+    p.RightForeArm = [-0.7 - pull * 0.3, 0.7, 0]
   }
 
   /**
@@ -588,17 +674,33 @@ export class Cctv {
     this.add(p, 'RightForeArm', Math.sin(t * 12.9 + 1.7) * tr, 0, Math.sin(t * 10.7 + 0.6) * tr)
   }
 
-  /** Ходьба и бег: махи ног, скрутка корпуса, крен в повороте. */
+  /** Ходьба и бег: махи ног, скрутка корпуса, крен и мелкий шаг в развороте. */
   private walkPose(base: Pose, t: number): void {
     const g = this.girl!
 
     if (this.state === 'pace') {
       // бродит по комнате; путь слегка неровный, не по линейке
-      this.targetX = Math.sin(t * 0.45) * 1.1 + this.wob(t * 0.5, 5) * 0.22
+      this.targetX = Math.sin(t * 0.45) * 1.05 + this.wob(t * 0.5, 5) * 0.18
+      this.targetZ = -1.55 + this.wob(t * 0.23, 3) * 0.16
+      // направление меняем только когда цель заметно в стороне: у крайней
+      // точки иначе корпус дёргается туда-сюда каждый кадр
+      const dx = this.targetX - g.position.x
+      if (Math.abs(dx) > 0.2) this.yawTarget = dx > 0 ? Math.PI / 2 : -Math.PI / 2
+    } else if (this.state === 'run') {
+      this.yawTarget = Math.PI
     }
+
+    // насколько корпус ещё не довернулся к движению: в развороте шаг мельче,
+    // вес переносится, голова ведёт поворот
+    let err = (this.yawTarget - this.yaw) % (Math.PI * 2)
+    if (err > Math.PI) err -= Math.PI * 2
+    if (err < -Math.PI) err += Math.PI * 2
+    const turning = clamp(Math.abs(err) / 1.2, 0, 1)
+    const lean = clamp(err, -0.7, 0.7)
+
     const run = this.state === 'run'
     const w = this.phase * (run ? 1.35 : 1)
-    const amp = this.moveBlend * (run ? 0.58 : 0.42)
+    const amp = this.moveBlend * (run ? 0.58 : 0.42) * (1 - turning * 0.3)
     const swingL = Math.sin(w)
     const swingR = Math.sin(w + Math.PI)
 
@@ -612,30 +714,30 @@ export class Cctv {
     base.LeftFoot = [-swingL * amp * 0.5 + kneeL * 0.3, 0, 0]
     base.RightFoot = [-swingR * amp * 0.5 + kneeR * 0.3, 0, 0]
 
-    // корпус: наклон вперёд, плечи скручиваются против бёдер
-    base.Spine = [(run ? 0.2 : 0.08) + amp * 0.08, -swingL * 0.08, this.wob(t, 9) * 0.02]
-    // голова запаздывает за корпусом и гасит тряску
-    base.Head = [Math.sin(w * 2 - 0.6) * amp * 0.06, -swingL * 0.06, this.wob(t, 4) * 0.03]
+    // корпус: наклон вперёд, плечи скручиваются против бёдер, в повороте крен
+    base.Spine = [(run ? 0.2 : 0.08) + amp * 0.08, -swingL * 0.08, -lean * 0.05]
+    // голова запаздывает за корпусом и ведёт разворот
+    base.Head = [
+      Math.sin(w * 2 - 0.6) * amp * 0.06,
+      -swingL * 0.06 + lean * 0.3,
+      this.wob(t, 4) * 0.03,
+    ]
 
     // руки качаются в противофазе ногам; локти гнутся, когда рука идёт вперёд
     const armL = swingL * amp * 1.15
     const armR = swingR * amp * 1.15
-    base.LeftArm = [armL, 0, -1.38]
-    base.RightArm = [armR, 0, 1.38]
-    base.LeftForeArm = [-0.2 - Math.max(0, -armL) * 0.9, 0, 0]
-    base.RightForeArm = [-0.2 - Math.max(0, -armR) * 0.9, 0, 0]
+    base.LeftArm = [armL, 0, 0.1]
+    base.RightArm = [armR, 0, -0.1]
+    base.LeftForeArm = [-0.22 - Math.max(0, -armL) * 0.9, 0, 0]
+    base.RightForeArm = [-0.22 - Math.max(0, -armR) * 0.9, 0, 0]
 
     // бёдра: перекат веса и скрутка в такт шагам
     this.add(base, 'Hips', 0, swingL * 0.08 * this.moveBlend, -swingL * 0.045 * this.moveBlend)
     // крен в поворот: куда крутится, туда и заваливается
-    this.add(base, 'Hips', 0, 0, clamp(this.yawDelta * 1.5, -0.1, 0.1))
+    this.add(base, 'Hips', 0, 0, -lean * 0.06 + clamp(this.yawDelta * 1.5, -0.06, 0.06))
 
     // подпрыг корпуса: двойная частота шага
     g.position.y += Math.abs(Math.cos(w)) * (run ? 0.04 : 0.022) * this.moveBlend
-
-    // лицом по ходу движения
-    const dx = this.targetX - g.position.x
-    if (Math.abs(dx) > 0.05) this.yawTarget = dx > 0 ? Math.PI / 2 : -Math.PI / 2
   }
 
   /** Стоит у двери и бьётся в неё: серии из трёх ударов, пауза, осмотр. */
@@ -647,38 +749,49 @@ export class Cctv {
     const inBurst = cycle < 1.41 && idx < 3
     const hit = inBurst ? Math.sin(((cycle % 0.47) / 0.47) * Math.PI) ** 1.5 : 0
 
-    // обе руки подняты к двери; бьёт по очереди, вторая ладонью опирается
+    // Руки подняты вперёд к двери; бьёт по очереди, вторая ладонью опирается.
     const right = idx % 2 === 0
-    const shoulder = -1.32 - hit * 0.16
-    const elbow = -0.55 + hit * 0.45
+    const shoulder = -1.42 - hit * 0.14
+    const elbow = -0.28 + hit * 0.12
     if (right) {
-      base.RightArm = [shoulder, 0.55, 1.2]
+      base.RightArm = [shoulder, 0, -0.16]
       base.RightForeArm = [elbow, 0, 0]
-      base.LeftArm = [-1.28, -0.55, -1.2]
-      base.LeftForeArm = [-0.6, 0, 0]
+      base.LeftArm = [-1.36, 0, 0.16]
+      base.LeftForeArm = [-0.42, 0, 0]
     } else {
-      base.LeftArm = [shoulder, -0.55, -1.2]
+      base.LeftArm = [shoulder, 0, 0.16]
       base.LeftForeArm = [elbow, 0, 0]
-      base.RightArm = [-1.28, 0.55, 1.2]
-      base.RightForeArm = [-0.6, 0, 0]
+      base.RightArm = [-1.36, 0, -0.16]
+      base.RightForeArm = [-0.42, 0, 0]
     }
 
     // бьётся всем телом: корпус и голова подаются в удары
-    base.Spine = [0.12 + hit * 0.07, this.wob(t * 0.4, 2) * 0.04, 0]
+    base.Spine = [0.12 + hit * 0.07, (right ? -1 : 1) * (0.03 + hit * 0.05), 0]
     base.Head = [0.05 + hit * 0.06, hit > 0.1 ? 0 : this.wob(t * 0.5, 6) * 0.3, 0]
     this.add(base, 'Hips', 0, 0, hit * 0.025)
 
     // стоит у двери, лицом к ней
     this.targetX = 0
-    this.targetZ = -2.35
+    this.targetZ = -2.45
     this.yawTarget = Math.PI
     void stress
   }
 
-  /** Стоит без дела: переминается, вес перекатывается, взгляд гуляет. */
+  /** Стоит без дела: переминается, вес перекатывается, живые случайные жесты. */
   private standPose(base: Pose, t: number, dt: number, breath: number, stress: number): void {
-    // взгляд: дверь, вниз на руки, в сторону; смотрит недолго и переводит
-    if (t > this.gazeNext) {
+    const gst = this.gesture
+    const gp = gst ? clamp((t - gst.start) / gst.dur, 0, 1) : 0
+
+    // взгляд: жест задаёт цель, иначе дверь/руки/стороны
+    if (gst?.kind === 'look') {
+      this.gazeTarget = { x: 0.02, y: gst.side * 0.95 }
+    } else if (gst?.kind === 'wave') {
+      this.gazeTarget = { x: -0.18, y: 0 } // в камеру
+    } else if (gst?.kind === 'shiver') {
+      this.gazeTarget = { x: 0.3, y: 0 }
+    } else if (gst?.kind === 'fidget') {
+      this.gazeTarget = { x: 0.45, y: -0.35 }
+    } else if (t > this.gazeNext) {
       const r = Math.random()
       this.gazeTarget = {
         x: r < 0.3 ? 0.12 : r < 0.85 ? -0.05 : 0.3,
@@ -700,15 +813,57 @@ export class Cctv {
     base.Head = [this.gaze.x + breath * 0.02, this.gaze.y, this.wob(t, 4) * 0.04]
 
     // руки висят и слегка живут; кисти безвольно повёрнуты
-    base.LeftArm = [this.wob(t, 2) * 0.04, 0, -1.42 + shift * 0.03]
-    base.RightArm = [this.wob(t, 6) * 0.04, 0, 1.42 + shift * 0.03]
+    base.LeftArm = [this.wob(t, 2) * 0.04, 0, 0.08 + shift * 0.03]
+    base.RightArm = [this.wob(t, 6) * 0.04, 0, -0.08 + shift * 0.03]
     base.LeftForeArm = [-0.18 + this.wob(t * 0.7, 1) * 0.08, 0, 0]
     base.RightForeArm = [-0.18 + this.wob(t * 0.7, 8) * 0.08, 0, 0]
 
-    this.targetX = CHAIR.x + Math.sin(t * 0.25) * 0.25
-    this.targetZ = -1.4
-    // лицом к двери
-    this.yawTarget = Math.PI
+    // ── живые жесты ──────────────────────────────────────────────────
+    if (gst?.kind === 'wave') {
+      // поднимает правую руку за полсекунды, машет и опускает
+      const up = smooth(clamp(gp / 0.22, 0, 1))
+      const down = 1 - smooth(clamp((gp - 0.78) / 0.22, 0, 1))
+      const raise = up * down
+      const wave = Math.sin((t - gst.start) * 9) * raise
+      base.RightArm = [this.wob(t, 6) * 0.03 - 0.12 * raise, 0, -0.08 - 1.12 * raise]
+      base.RightForeArm = [-0.18 + 0.28 * raise, 0, -1.4 * raise]
+      base.RightHand = [0, 0, wave * 0.5]
+      base.Head = [base.Head[0] - 0.08 * raise, this.gaze.y, 0.06 * raise]
+      base.Spine = [base.Spine[0], base.Spine[1] + 0.05 * raise, base.Spine[2]]
+      this.yawTarget = this.faceCameraYaw()
+    } else if (gst?.kind === 'look') {
+      base.Spine = [base.Spine[0], base.Spine[1] + gst.side * 0.08, base.Spine[2]]
+    } else if (gst?.kind === 'shiver') {
+      // плечи к ушам, руки прижаты, мелкая дрожь
+      const sh = Math.sin(Math.PI * gp) ** 0.7
+      base.Spine = [base.Spine[0] + 0.1 * sh, base.Spine[1], base.Spine[2]]
+      base.Head = [
+        base.Head[0] + 0.12 * sh,
+        base.Head[1] + Math.sin(t * 22) * 0.03 * sh,
+        base.Head[2],
+      ]
+      base.LeftArm = [base.LeftArm[0], 0, base.LeftArm[2] - 0.12 * sh]
+      base.RightArm = [base.RightArm[0], 0, base.RightArm[2] + 0.12 * sh]
+      base.LeftForeArm = [base.LeftForeArm[0] - 0.3 * sh, 0, 0]
+      base.RightForeArm = [base.RightForeArm[0] - 0.3 * sh, 0, 0]
+    } else if (gst?.kind === 'fidget') {
+      // переступает на месте и теребит край свитера
+      const sh = Math.sin(Math.PI * gp) ** 0.7
+      base.LeftForeArm = [base.LeftForeArm[0] - 0.5 * sh, -0.3 * sh, 0]
+      base.RightForeArm = [base.RightForeArm[0] - 0.45 * sh, 0.3 * sh, 0]
+      base.Spine = [base.Spine[0] + 0.04 * sh, base.Spine[1], base.Spine[2]]
+    }
+
+    // Жест держит её на месте; иначе — просто стоит недалеко от стула.
+    if (gst) {
+      this.targetX = this.girl!.position.x
+      this.targetZ = this.girl!.position.z
+    } else {
+      this.targetX = CHAIR.x + Math.sin(t * 0.25) * 0.25
+      this.targetZ = -1.55
+      // лицом к двери
+      this.yawTarget = Math.PI
+    }
   }
 
   /** Дверь открывается — девушка убегает. */
