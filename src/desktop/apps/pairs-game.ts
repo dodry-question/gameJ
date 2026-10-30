@@ -52,6 +52,8 @@ export class PairsGame {
   onFail?: () => void
   /** Нажата «Печать»: код уходит на принтер в кухне (любой, хоть неверный). */
   onPrint?: (code: string) => void
+  /** Оба этапа пройдены: пароль выхода показан — дверь кухни его ждёт. */
+  onPassword?: (code: string) => void
 
   private sound: Sound
   private stage = 0 // индекс в STAGES
@@ -213,6 +215,7 @@ export class PairsGame {
         this.state = 'won'
         if (!this.password) {
           this.password = String(1000 + Math.floor(Math.random() * 9000))
+          this.onPassword?.(this.password)
         }
         this.printed = false
         this.sound.message()

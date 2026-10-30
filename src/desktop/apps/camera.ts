@@ -6,7 +6,7 @@
  * замка оживают только после полной загрузки. Сцену камеры двигает TDS,
  * сам экран её не обновляет.
  */
-import { fill, inside, panel, setFont, text } from '../draw'
+import { fill, inside, panel, setFont, text, wrap } from '../draw'
 import type { Rect } from '../draw'
 import type { Sound } from '../../audio'
 import { getCctv } from '../../cctv'
@@ -14,6 +14,7 @@ import type { Cctv } from '../../cctv'
 
 type Phase = 'locked' | 'ready' | 'untied' | 'open'
 type Hit = { r: Rect; fn: () => void }
+type MenuItem = { r: Rect; id: string; action: string; label: string }
 
 /** Сколько идёт «приём» картинки. */
 const REVEAL_MS = 2600
@@ -38,6 +39,12 @@ export class CameraFeed {
   private noise: HTMLCanvasElement
   /** Какой канал смотрим: 04 — комната 4, 05 — кухня. */
   private channel: '04' | '05' = '04'
+  /** Режим скана (TAB): рамки и подписи на объектах кухни. */
+  private scan = false
+  /** Открытое меню команд: точка на экране и строки. */
+  private menu: { x: number; y: number; id: string; items: Array<{ label: string; action: string }> } | null = null
+  private menuHit: MenuItem[] = []
+  private feedRect: Rect | null = null
 
   /**
    * Кнопка «Открыть дверь» больше не отпирает замок сама: терминал выдаёт
@@ -169,7 +176,26 @@ export class CameraFeed {
     // дыхание девушки: слышно, пока виден кадр, и чем больше стресс, тем чаще
     const audible = active && this.ready && this.phase !== 'open' && cctv.loaded && !cctv.gone
     this.sound.setBreathing(audible ? cctv.stress : null)
+
+    // события кухни → звуки ленты: дверь приняла или отказала
+    if (cctv.events.length > 0) {
+      for (const ev of cctv.events.splice(0)) {
+        if (ev === 'doorDeny') this.sound.error()
+        else if (ev === 'doorOk') this.sound.open()
+      }
+    }
     return true
+  }
+
+  /** TAB на кухне: включить/выключить подсветку объектов. */
+  key(e: KeyboardEvent): boolean {
+    if (e.code === 'Tab' && !e.repeat && this.channel === '05' && this.ready) {
+      this.scan = !this.scan
+      if (!this.scan) this.menu = null
+      this.sound.click()
+      return true
+    }
+    return false
   }
 
   draw(ctx: CanvasRenderingContext2D, r: Rect): void {
@@ -206,6 +232,7 @@ export class CameraFeed {
       ctx.drawImage(cctv.canvas, feed.x, feed.y, feed.w, feed.h)
       ctx.restore()
       this.overlay(ctx, feed)
+      if (this.channel === '05') this.kitchenUi(ctx, feed, cctv)
     } else {
       text(ctx, 'НЕТ СИГНАЛА', feed.x + feed.w / 2, feed.y + feed.h / 2, {
         size: 14,
@@ -217,6 +244,7 @@ export class CameraFeed {
 
     ctx.strokeStyle = '#3c4044'
     ctx.strokeRect(feed.x + 0.5, feed.y + 0.5, feed.w - 1, feed.h - 1)
+    this.feedRect = feed
 
     // ── шапка записи ────────────────────────────────────────────────
     setFont(ctx, 11, true)
@@ -406,10 +434,160 @@ export class CameraFeed {
 
   click(x: number, y: number, _r: Rect): void {
     if (!this.ready) return
+    // меню команд: клик по пункту выполняет команду, мимо — закрывает
+    if (this.menuHit.length > 0) {
+      const items = this.menuHit
+      this.menuHit = []
+      const id = this.menu?.id
+      this.menu = null
+      void id
+      for (const it of items) {
+        if (inside(it.r, x, y)) {
+          this.sound.click()
+          this.cctv?.command(it.id, it.action)
+          return
+        }
+      }
+      return
+    }
+    // клик по объекту кухни открывает меню команд (в режиме скана)
+    if (this.channel === '05' && this.feedRect && this.scan) {
+      const picked = this.pickAt(x, y)
+      if (picked) {
+        this.menu = { x, y, id: picked.id, items: this.menuFor(picked.id) }
+        this.sound.click()
+        return
+      }
+    }
     for (let i = this.hits.length - 1; i >= 0; i--) {
       if (inside(this.hits[i].r, x, y)) {
         this.hits[i].fn()
         return
+      }
+    }
+  }
+
+  /** Объект кухни под точкой рабочего стола. */
+  private pickAt(x: number, y: number): { id: string; label: string } | null {
+    const f = this.feedRect
+    if (!f) return null
+    const nx = ((x - f.x) / f.w) * 2 - 1
+    const ny = -(((y - f.y) / f.h) * 2 - 1)
+    return this.cctv?.pick(nx, ny) ?? null
+  }
+
+  /** Меню команд для объекта кухни. */
+  private menuFor(id: string): Array<{ label: string; action: string }> {
+    if (id === 'knife') return [{ label: 'Возьми нож', action: 'take' }]
+    if (id === 'fridge') return [{ label: 'Осмотри холодильник', action: 'inspect' }]
+    if (id === 'meat') {
+      return [
+        { label: 'Разрежь ножом', action: 'cut' },
+        { label: 'Ничего', action: 'none' },
+      ]
+    }
+    if (id === 'stove') return [{ label: 'Осмотри плиту', action: 'inspect' }]
+    if (id === 'printer') return [{ label: 'Прочитай, что на нём', action: 'read' }]
+    if (id === 'exit') return [{ label: 'Подойди к двери', action: 'try' }]
+    return []
+  }
+
+  /**
+   * Слой кухни поверх кадра: субтитры её реплик, режим скана с рамками и
+   * подписями, меню команд и глитч, когда в кадре происходит худшее.
+   */
+  private kitchenUi(ctx: CanvasRenderingContext2D, f: Rect, cctv: Cctv): void {
+    const now = performance.now()
+
+    // глитч нападения: рваные полосы самого кадра и красный отсвет
+    if (cctv.attackNow >= 0) {
+      for (let i = 0; i < 7; i++) {
+        const sy = f.y + Math.random() * f.h
+        const sh = 6 + Math.random() * 30
+        const srcY = (Math.random() * FEED_H) | 0
+        const srcH = Math.max(2, Math.round((sh / f.h) * FEED_H))
+        const dx = (Math.random() - 0.5) * 34
+        ctx.drawImage(cctv.canvas, 0, srcY, FEED_W, srcH, f.x + dx, sy, f.w, sh)
+      }
+      ctx.fillStyle = `rgba(120, 14, 8, ${(0.12 + Math.random() * 0.2).toFixed(3)})`
+      ctx.fillRect(f.x, f.y, f.w, f.h)
+    }
+
+    this.menuHit = []
+
+    // субтитры: то, что она говорит оператору
+    const sub = cctv.subtitleNow
+    if (sub.text && now < sub.until) {
+      const lines = wrap(ctx, sub.text, f.w - 40, 11).slice(0, 3)
+      const h = lines.length * 15 + 10
+      ctx.fillStyle = 'rgba(6, 10, 8, 0.72)'
+      ctx.fillRect(f.x + 8, f.y + f.h - 14 - h, f.w - 16, h)
+      setFont(ctx, 11)
+      ctx.fillStyle = '#d8e6d8'
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'middle'
+      let y = f.y + f.h - 14 - h + 12
+      for (const line of lines) {
+        ctx.fillText(line, f.x + f.w / 2, y)
+        y += 15
+      }
+      ctx.textAlign = 'left'
+    }
+
+    // скан: скобки-уголки вокруг объектов и подписи
+    if (this.scan && !this.menu) {
+      for (const id of ['knife', 'fridge', 'meat', 'stove', 'printer', 'exit']) {
+        const p = cctv.project(id)
+        if (!p) continue
+        const sx = f.x + (p.x / FEED_W) * f.w
+        const sy = f.y + (p.y / FEED_H) * f.h
+        const r = 14
+        ctx.strokeStyle = 'rgba(140, 220, 255, 0.85)'
+        ctx.lineWidth = 1.4
+        for (const [ax, ay] of [
+          [-1, -1],
+          [1, -1],
+          [-1, 1],
+          [1, 1],
+        ]) {
+          ctx.beginPath()
+          ctx.moveTo(sx + ax * r, sy + ay * r - ay * 6)
+          ctx.lineTo(sx + ax * r, sy + ay * r)
+          ctx.lineTo(sx + ax * r - ax * 6, sy + ay * r)
+          ctx.stroke()
+        }
+        ctx.lineWidth = 1
+        setFont(ctx, 9, true)
+        ctx.fillStyle = 'rgba(140, 220, 255, 0.95)'
+        ctx.textAlign = 'center'
+        ctx.textBaseline = 'middle'
+        ctx.fillText(p.label, sx, sy - r - 8)
+        ctx.textAlign = 'left'
+      }
+      text(ctx, 'клик по объекту — команда · TAB — выключить скан', f.x + f.w / 2, f.y + 12, {
+        size: 9,
+        color: 'rgba(140, 220, 255, 0.85)',
+        align: 'center',
+      })
+    }
+
+    // меню команд
+    if (this.menu) {
+      const items = this.menu.items
+      const w = 180
+      const h = items.length * 22 + 8
+      let mx = this.menu.x
+      let my = this.menu.y
+      if (mx + w > f.x + f.w - 6) mx = f.x + f.w - 6 - w
+      if (my + h > f.y + f.h - 6) my = f.y + f.h - 6 - h
+      panel(ctx, { x: mx, y: my, w, h }, true, 2)
+      let yy = my + 4
+      for (const it of items) {
+        const r: Rect = { x: mx + 4, y: yy, w: w - 8, h: 18 }
+        fill(ctx, r, '#dcdcd4')
+        text(ctx, it.label, r.x + 8, r.y + r.h / 2, { size: 11 })
+        this.menuHit.push({ r, id: this.menu.id, action: it.action, label: it.label })
+        yy += 22
       }
     }
   }

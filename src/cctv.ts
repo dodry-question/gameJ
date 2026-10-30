@@ -22,8 +22,8 @@ import type { Kitchen } from './cctv-kitchen'
 
 export type GirlState = 'tied' | 'idle' | 'pace' | 'knock' | 'run' | 'toKitchen' | 'kitchen' | 'gone'
 
-const W = 320
-const H = 240
+export const W = 320
+export const H = 240
 
 /**
  * Поза: имя кости → углы поворота от позы покоя в осях комнаты:
@@ -90,6 +90,11 @@ const smooth = (v: number): number => v * v * (3 - 2 * v)
 
 export class Cctv {
   readonly canvas: HTMLCanvasElement
+  /** Она вышла через дверь кухни: конец демо. */
+  onEscaped?: () => void
+  /** Маньяк добился своего: рабочий стол показывает «ВЫ ПРОИГРАЛИ». */
+  onDead?: () => void
+
   private renderer: THREE.WebGLRenderer
   private scene = new THREE.Scene()
   private camera = new THREE.PerspectiveCamera(62, W / H, 0.1, 40)
@@ -146,6 +151,35 @@ export class Cctv {
   private gestureNext = 7
   /** Когда снова выбрать точку блуждания по кухне. */
   private wanderNext = 0
+
+  // ── кухня: команды оператора ──────────────────────────────────────
+  /** Текущее поручение: к какому объекту и что делать. */
+  private task: {
+    id: string
+    action: string
+    phase: 'walk' | 'act'
+    fired: boolean
+  } | null = null
+  private taskT = 0
+  /** Прогресс по кухне: что взято, найдено, напечатано. */
+  private flags = {
+    knife: false,
+    fridgeOpen: false,
+    meatOut: false,
+    meatCut: false,
+    hasPaper: false,
+    leaving: false,
+  }
+  private fear = 0
+  private refuseUsed = false
+  private subtitle = { text: '', until: 0 }
+  /** События для ленты камеры: звуки двери и прочее. */
+  readonly events: string[] = []
+  private exitCode = ''
+  private printedCode = ''
+  /** Сцена нападения: −1 нет, 0…3.5 идёт, −2 закончилась. */
+  private attackT = -1
+  private raycaster = new THREE.Raycaster()
   private euler = new THREE.Euler()
   private delta = new THREE.Quaternion()
   private deltaWorld = new THREE.Quaternion()
@@ -453,6 +487,8 @@ export class Cctv {
       this.narrative()
       this.gestures()
       this.move(dt)
+      this.kitchenTask(dt)
+      this.kitchenAttack(dt)
       this.animate(dt)
     }
 
@@ -490,7 +526,7 @@ export class Cctv {
       return
     }
     // В кухне бродит сама: время от времени выбирает новую точку.
-    if (this.state === 'kitchen') {
+    if (this.state === 'kitchen' && !this.task && !this.flags.leaving) {
       const g = this.girl!
       const near = Math.hypot(g.position.x - this.targetX, g.position.z - this.targetZ) < 0.35
       if (near && this.time >= this.wanderNext) {
@@ -509,6 +545,21 @@ export class Cctv {
           }
         }
       }
+      return
+    }
+    // Уход через дверь: дойдя до порога, шагает наружу и растворяется.
+    if (this.state === 'kitchen' && this.flags.leaving) {
+      const g = this.girl!
+      const near = Math.hypot(g.position.x - this.targetX, g.position.z - this.targetZ) < 0.35
+      if (near) {
+        this.targetX = 0
+        this.targetZ = -13.6
+      }
+      if (g.position.z < -13.05) {
+        g.visible = false
+        this.setState('gone')
+        this.onEscaped?.()
+      }
     }
   }
 
@@ -519,6 +570,7 @@ export class Cctv {
    */
   private gestures(): void {
     const t = this.time
+    if (this.task || this.attackT >= 0) return // занята поручением или случилось худшее
     if (this.gesture) {
       if (t - this.gesture.start > this.gesture.dur) {
         this.gesture = null
@@ -559,8 +611,8 @@ export class Cctv {
       px = o.x + dx * k
       pz = o.z + dz * k
     }
-    // в кухне не даём пройти сквозь стены
-    if (pz < KITCHEN.z1) {
+    // в кухне не даём пройти сквозь стены — кроме финального ухода в дверь
+    if (pz < KITCHEN.z1 && !this.flags.leaving) {
       px = clamp(px, KITCHEN.x0 + 0.3, KITCHEN.x1 - 0.3)
       pz = clamp(pz, KITCHEN.z0 + 0.3, KITCHEN.z1 - 0.1)
     }
@@ -580,7 +632,7 @@ export class Cctv {
     if (this.state === 'tied') return 0.35 + Math.sin(this.time * 0.7) * 0.08
     if (this.state === 'pace' || this.state === 'idle') return 0.55
     if (this.state === 'knock') return 0.85
-    if (this.state === 'kitchen') return 0.65 + Math.sin(this.time * 0.5) * 0.06
+    if (this.state === 'kitchen') return 0.55 + this.fear * 0.45 + Math.sin(this.time * 0.5) * 0.04
     if (this.state === 'run' || this.state === 'toKitchen') return 1
     return 0
   }
@@ -611,6 +663,12 @@ export class Cctv {
       this.phase = 0
       this.yaw = this.yawTarget = CHAIR_YAW
       g.rotation.y = this.yaw
+      return
+    }
+
+    // Нападение: она застыла, дальше двигает сцена атаки.
+    if (this.attackT >= 0) {
+      this.prev.set(g.position.x, 0, g.position.z)
       return
     }
 
@@ -709,13 +767,25 @@ export class Cctv {
       return
     }
 
+    // Нападение: она застыла лицом к маньяку и дрожит.
+    if (this.attackT >= 0 && this.attackT < 2.2) {
+      const p: Pose = { ...STAND }
+      this.add(p, 'Spine', -0.18, 0, 0)
+      this.add(p, 'LeftArm', -0.45, 0, 0.55)
+      this.tremor(p, t, 1)
+      this.applyPose(p)
+      return
+    }
+
     const nearTarget = Math.hypot(g.position.x - this.targetX, g.position.z - this.targetZ) < 0.3
+    const walkingTask = !!this.task && this.task.phase === 'walk'
     const moving =
       !this.gesture &&
+      this.attackT < 0 &&
       (this.state === 'pace' ||
         this.state === 'run' ||
         this.state === 'toKitchen' ||
-        (this.state === 'kitchen' && !nearTarget) ||
+        (this.state === 'kitchen' && (!nearTarget || this.flags.leaving || walkingTask)) ||
         (this.state === 'knock' && !nearTarget))
     this.moveBlend += ((moving ? 1 : 0) - this.moveBlend) * Math.min(1, dt * 5)
 
@@ -729,9 +799,52 @@ export class Cctv {
       this.standPose(base, t, dt, breath, stress)
     }
 
+    // действие по поручению: руки и наклон поверх стойки
+    if (this.task && this.task.phase === 'act') this.taskPose(base)
+
     this.tremor(base, t, stress)
     this.applyPose(base)
     this.updateWristRopes()
+  }
+
+  /** Поза действия по поручению: наклон и руки поверх базовой позы. */
+  private taskPose(p: Pose): void {
+    const task = this.task!
+    const k = this.taskT
+    const reach = (v: number): number => Math.sin(clamp(v, 0, 1) * Math.PI)
+    if (task.id === 'knife') {
+      const m = reach(k / 1.2)
+      this.add(p, 'RightArm', -1.6 * m, 0, -0.25 * m)
+      this.add(p, 'RightForeArm', -0.6 * m, 0, 0)
+      this.add(p, 'Spine', 0.3 * m, 0, 0)
+    } else if (task.id === 'fridge' || (task.id === 'meat' && task.action === 'cut')) {
+      const m = reach(k / 1.6)
+      this.add(p, 'LeftArm', -1.7 * m, 0, 0.3 * m)
+      this.add(p, 'RightArm', -1.7 * m, 0, -0.3 * m)
+      this.add(p, 'LeftForeArm', -0.5 * m, 0, 0)
+      this.add(p, 'RightForeArm', -0.5 * m, 0, 0)
+      this.add(p, 'Spine', 0.35 * m, 0, 0)
+      if (task.action === 'cut') {
+        // рубящие взмахи правой рукой
+        const chop = Math.max(0, Math.sin(k * 9)) * (k > 0.3 && k < 1.5 ? 1 : 0.2)
+        this.add(p, 'RightForeArm', chop * 0.8, 0, 0)
+      }
+    } else if (task.id === 'printer') {
+      const m = reach(k / 1.4)
+      this.add(p, 'RightArm', -1.3 * m, -0.4 * m, -0.2 * m)
+      this.add(p, 'LeftArm', -1.3 * m, 0.4 * m, 0.2 * m)
+      this.add(p, 'Spine', 0.4 * m, 0, 0)
+      this.add(p, 'Head', 0.3 * m, 0, 0)
+    } else if (task.id === 'exit') {
+      const m = reach(k / 1.0)
+      this.add(p, 'RightArm', -1.45 * m, -0.55 * m, -0.1 * m)
+      this.add(p, 'Spine', 0.2 * m, 0, 0)
+      this.add(p, 'Head', 0.12 * m, 0, 0)
+    } else if (task.id === 'stove') {
+      const m = reach(k / 1.2)
+      this.add(p, 'Spine', 0.35 * m, 0, 0)
+      this.add(p, 'Head', 0.25 * m, 0, 0)
+    }
   }
 
   /** Привязана: дышит, бьётся в верёвках рывками, озирается и трясёт головой. */
@@ -999,6 +1112,285 @@ export class Cctv {
   debugToKitchen(): void {
     this.untie()
     this.setState('toKitchen')
+  }
+
+  // ── команды оператора на кухне ────────────────────────────────────
+
+  get kitchenFear(): number {
+    return this.fear
+  }
+
+  get subtitleNow(): { text: string; until: number } {
+    return this.subtitle
+  }
+
+  get attackNow(): number {
+    return this.attackT
+  }
+
+  /** Оператор выбрал команду в меню объекта. */
+  command(id: string, action: string): void {
+    if (this.state !== 'kitchen' || this.attackT >= 0 || this.flags.leaving) return
+    if (this.task) return // занята предыдущим поручением
+    this.gesture = null // поручение важнее «живости»: она прерывает жест
+    // printer и exit — в тёмном углу: со страхом она туда первый раз не пойдёт
+    const dark = id === 'printer' || id === 'exit'
+    if (dark && this.fear > 0.5 && !this.refuseUsed) {
+      this.say('там так темно... не хочу одна. не заставляй', 3.6)
+      this.refuseUsed = true
+      return
+    }
+    if (dark && this.refuseUsed && !this.task) {
+      // собралась с духом — но только на этот раз
+      this.say('...ладно. только быстро, хорошо?', 2.6)
+      this.refuseUsed = false
+      this.fear = Math.min(1, this.fear + 0.1)
+    }
+    if (id === 'meat' && action === 'cut' && !this.flags.knife) {
+      this.say('чем резать? нужен нож. он на столе', 3)
+      return
+    }
+    if (id === 'exit' && action === 'try' && !this.flags.hasPaper) {
+      this.say('у двери клавиатура. нужен код — бумажка с принтера', 3.4)
+      return
+    }
+    this.task = { id, action, phase: 'walk', fired: false }
+    const obj = this.kitchen.objects.find((o) => o.id === id)
+    if (obj) {
+      this.targetX = obj.stand[0]
+      this.targetZ = obj.stand[1]
+      this.yawTarget = obj.yaw
+    }
+  }
+
+  /** Пароль выхода с pairs.local — его знает только дверь. */
+  setExitCode(code: string): void {
+    this.exitCode = code
+  }
+
+  /** Сайт отправил печать: принтер выносит бумажку с тем, что ввели. */
+  print(code: string): void {
+    if (this.state !== 'kitchen' && this.state !== 'toKitchen') return
+    this.printedCode = code
+    this.kitchen.startPrint()
+  }
+
+  /** Провал головоломки: маньяк бросается из проёма. */
+  maniacAttack(): void {
+    if (this.attackT >= 0 || this.state === 'tied') return
+    this.task = null
+    this.attackT = 0
+    this.kitchen.maniac.visible = true
+    this.kitchen.maniac.position.set(0, 0, KITCHEN.z1 - 0.3)
+  }
+
+  private say(text: string, sec: number): void {
+    this.subtitle = { text, until: performance.now() + sec * 1000 }
+  }
+
+  /**
+   * Логика поручений: дойти до объекта, выполнить действие с позой и
+   * эффектами. Вызывается каждый кадр, пока на кухне.
+   */
+  private kitchenTask(dt: number): void {
+    const g = this.girl!
+    // бумажка выползла из принтера — она слышала и идёт сама
+    if (
+      !this.task &&
+      this.state === 'kitchen' &&
+      !this.flags.leaving &&
+      this.kitchen.paperReady &&
+      !this.flags.hasPaper &&
+      this.attackT < 0
+    ) {
+      this.task = { id: 'printer', action: 'takePaper', phase: 'walk', fired: false }
+      const obj = this.kitchen.objects.find((o) => o.id === 'printer')!
+      this.targetX = obj.stand[0]
+      this.targetZ = obj.stand[1]
+      this.yawTarget = obj.yaw
+    }
+    if (!this.task || this.attackT >= 0) return
+    const t = this.task
+    const obj = this.kitchen.objects.find((o) => o.id === t.id)
+    if (!obj) {
+      this.task = null
+      return
+    }
+
+    if (t.phase === 'walk') {
+      // смотрим по ходу движения, иначе из-за препятствия не дойдёт:
+      // разворот на объект — только на месте, в фазе действия
+      this.yawTarget = Math.atan2(obj.stand[0] - g.position.x, obj.stand[1] - g.position.z)
+      const near = Math.hypot(g.position.x - obj.stand[0], g.position.z - obj.stand[1]) < 0.3
+      if (near) {
+        t.phase = 'act'
+        this.taskT = 0
+        this.yawTarget = obj.yaw
+      }
+      return
+    }
+
+    // фаза действия: таймер и одноразовые эффекты
+    this.taskT += dt
+    const at = this.taskT
+    if (t.id === 'knife' && t.action === 'take') {
+      if (at > 0.9 && !t.fired) {
+        t.fired = true
+        this.flags.knife = true
+        this.fear = 0.65
+        this.say('кровь... она ещё свежая. не свернулась. за мной шли недавно', 4.2)
+      }
+      if (at > 1.8) this.task = null
+      return
+    }
+    if (t.id === 'fridge' && t.action === 'inspect') {
+      if (at > 0.7 && !t.fired) {
+        t.fired = true
+        this.flags.fridgeOpen = true
+        this.kitchen.setFridgeOpen(true)
+      }
+      if (at > 1.7 && !this.flags.meatOut) {
+        this.flags.meatOut = true
+        this.kitchen.meat.visible = true
+        this.say('тут кусок мяса... большой, свежий', 3.2)
+      }
+      if (at > 2.4) this.task = null
+      return
+    }
+    if (t.id === 'meat' && t.action === 'cut') {
+      if (at > 1.5 && !t.fired) {
+        t.fired = true
+        this.kitchen.meat.visible = false
+        this.kitchen.plate.visible = true
+        this.flags.meatCut = true
+        this.say('внутри железка... на ней выбит адрес', 3)
+      }
+      if (at > 2.6) {
+        this.say('pairs точка локал. это их архив — записывай!', 4)
+        this.task = null
+      }
+      return
+    }
+    if (t.id === 'stove' && t.action === 'inspect') {
+      if (at > 0.8 && !t.fired) {
+        t.fired = true
+        this.say('плита ещё тёплая... тут кто-то был совсем недавно', 3.4)
+      }
+      if (at > 1.8) this.task = null
+      return
+    }
+    if (t.id === 'printer' && t.action === 'read') {
+      if (at > 0.8 && !t.fired) {
+        t.fired = true
+        this.say('на наклейке адрес: pairs.local — их архив памяти', 4)
+      }
+      if (at > 1.9) this.task = null
+      return
+    }
+    if (t.id === 'printer' && t.action === 'takePaper') {
+      if (at > 0.8 && !t.fired) {
+        t.fired = true
+        this.flags.hasPaper = true
+        this.kitchen.hidePaper()
+        this.say(`бумажка... тут цифры: ${this.printedCode}. иду к двери`, 3.4)
+      }
+      if (at > 1.6) {
+        // сама идёт пробовать код: задача принтера закрывается, дверь — новая
+        const obj = this.kitchen.objects.find((o) => o.id === 'exit')!
+        this.task = { id: 'exit', action: 'try', phase: 'walk', fired: false }
+        this.targetX = obj.stand[0]
+        this.targetZ = obj.stand[1]
+        this.yawTarget = obj.yaw
+      }
+      return
+    }
+    if (t.id === 'exit' && t.action === 'try') {
+      if (at > 1.0 && !t.fired) {
+        t.fired = true
+        if (this.printedCode && this.printedCode === this.exitCode) {
+          this.kitchen.setExitOpen(true)
+          this.events.push('doorOk')
+          this.say('подошло! дверь открылась — я выхожу', 3)
+          this.flags.leaving = true
+          this.targetX = 0
+          this.targetZ = -12.6
+        } else {
+          this.events.push('doorDeny')
+          this.fear = 1
+          this.say('не подходит... дверь отказала. она огорчена', 3.4)
+        }
+      }
+      if (!this.flags.leaving && at > 2.0) this.task = null
+      return
+    }
+    this.task = null
+  }
+
+  /** Сцена нападения: маньяк настигает её у кухни. */
+  private kitchenAttack(dt: number): void {
+    if (this.attackT < 0) return
+    const g = this.girl!
+    this.attackT += dt
+    const m = this.kitchen.maniac
+    const t = this.attackT
+    // рывок из проёма к ней
+    const rush = Math.min(1, t / 1.1)
+    const tx = g.position.x
+    const tz = g.position.z + 0.4
+    m.position.x = 0 + (tx - 0) * rush
+    m.position.z = KITCHEN.z1 - 0.3 + (tz - (KITCHEN.z1 - 0.3)) * rush
+    m.rotation.y = Math.atan2(tx - m.position.x, tz - m.position.z)
+    // замах
+    const arm = m.children[4] as THREE.Mesh
+    arm.rotation.z = rush < 1 ? -0.5 : -1.9 + Math.sin(t * 30) * 0.5
+    // она разворачивается к нему и дрожит
+    this.yaw = this.yawTarget = Math.atan2(m.position.x - g.position.x, m.position.z - g.position.z)
+    g.rotation.y = this.yaw
+    if (t > 2.1 && g.visible) {
+      // удар остаётся за глитчами кадра: её не видно
+      g.visible = false
+    }
+    if (t > 2.4 && !this.deadSent) {
+      this.deadSent = true
+      this.onDead?.()
+    }
+    if (t > 3.4) {
+      m.visible = false
+      this.attackT = -2
+    }
+  }
+
+  private deadSent = false
+
+  // ── ввод по кадру кухни ───────────────────────────────────────────
+
+  /** Что под курсором на кухне (nx, ny — NDC кадра). */
+  pick(nx: number, ny: number): { id: string; label: string } | null {
+    if (this.view !== '05') return null
+    this.raycaster.setFromCamera(new THREE.Vector2(nx, ny), this.camera)
+    const objs = this.kitchen.objects.filter((o) => o.mesh.visible)
+    const hits = this.raycaster.intersectObjects(objs.map((o) => o.mesh), true)
+    for (const h of hits) {
+      let o: THREE.Object3D | null = h.object
+      while (o) {
+        const found = objs.find((v) => v.mesh === o)
+        if (found) return { id: found.id, label: found.label }
+        o = o.parent
+      }
+    }
+    return null
+  }
+
+  /** Экранная точка объекта в пикселях ленты 320×240 — для режима скана. */
+  project(id: string): { x: number; y: number; label: string } | null {
+    if (this.view !== '05') return null
+    const obj = this.kitchen.objects.find((o) => o.id === id)
+    if (!obj || !obj.mesh.visible) return null
+    const p = new THREE.Vector3()
+    obj.mesh.getWorldPosition(p)
+    p.project(this.camera)
+    if (p.z > 1) return null
+    return { x: (p.x * 0.5 + 0.5) * W, y: (-p.y * 0.5 + 0.5) * H, label: obj.label }
   }
 
   release(): void {

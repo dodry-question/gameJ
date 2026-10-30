@@ -179,6 +179,12 @@ export class Tds implements App {
     this.say('УДЕРЖИВАЙТЕ КАМЕРУ 2 СЕКУНДЫ')
   }
 
+  /** Клавиша активному окну: TAB на кухне включает скан объектов. */
+  key(e: KeyboardEvent): boolean {
+    if (this.screen !== 'feed') return false
+    return this.feed.key(e)
+  }
+
   private area(r: Rect): Rect {
     return { x: r.x + 4, y: r.y + HEAD + 2, w: r.w - 8, h: r.h - HEAD - 6 }
   }

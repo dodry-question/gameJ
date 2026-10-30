@@ -11,6 +11,7 @@ import { Note } from './apps/note'
 import { Notepad } from './apps/notepad'
 import { Tds } from './apps/tds'
 import type { Sound } from '../audio'
+import { getCctv } from '../cctv'
 
 export const DESKTOP_W = 960
 export const DESKTOP_H = 720
@@ -188,6 +189,11 @@ export class Desktop {
   // кухня: пароль, напечатанный с pairs.local, и исход головоломки
   private printedCode: string | null = null
   private pairsLostFlag = false
+  /** Сцена «ВЫ ПРОИГРАЛИ»: момент показать и что показываем. */
+  private deadAt = 0
+  private girlDead = false
+  /** Она выбралась через дверь: конец демо. */
+  private escaped = false
 
   private drag: { win: Win; ox: number; oy: number } | null = null
   /** Протяжка внутри окна: выделение текста в блокноте. */
@@ -216,6 +222,16 @@ export class Desktop {
       y: 8 + i * 94,
     }))
     ;(window as unknown as { __desk?: Desktop }).__desk = this
+    // Исходы кухни: конец демо и смерть от маньяка — их рисует рабочий стол.
+    const cctv = getCctv()
+    cctv.onEscaped = () => {
+      this.escaped = true
+      this.dirty = true
+    }
+    cctv.onDead = () => {
+      this.deadAt = performance.now() + 1400
+      this.dirty = true
+    }
     // Через пять секунд после входа игрок должен понять, что от него хотят.
     window.setTimeout(() => this.notifyMail(), 5000)
   }
@@ -243,6 +259,13 @@ export class Desktop {
 
     if (this.toast && now >= this.toast.end) {
       this.toast = null
+      this.dirty = true
+    }
+
+    if (this.deadAt && now >= this.deadAt) {
+      this.girlDead = true
+      this.deadAt = 0
+      this.sound.error()
       this.dirty = true
     }
 
@@ -303,8 +326,58 @@ export class Desktop {
     if (this.install) this.drawInstall()
     if (this.toast) this.drawToast()
     if (this.volumeOpen) this.drawVolume()
+    if (this.girlDead) this.drawGameOver()
+    else if (this.escaped) this.drawEscaped()
     this.drawCursor()
     this.scanlines()
+  }
+
+  /** Провал: экран гаснет и пишет, что вы проиграли. */
+  private drawGameOver(): void {
+    const ctx = this.ctx
+    fill(ctx, { x: 0, y: 0, w: DESKTOP_W, h: DESKTOP_H }, '#050505')
+    text(ctx, 'ВЫ ПРОИГРАЛИ', DESKTOP_W / 2, DESKTOP_H / 2 - 30, {
+      size: 34,
+      bold: true,
+      color: '#b23a2e',
+      align: 'center',
+    })
+    text(ctx, 'камера 05 потеряла сигнал. смена прервана.', DESKTOP_W / 2, DESKTOP_H / 2 + 8, {
+      size: 12,
+      color: '#8a8a80',
+      align: 'center',
+    })
+    const btn: Rect = { x: DESKTOP_W / 2 - 110, y: DESKTOP_H / 2 + 44, w: 220, h: 30 }
+    panel(ctx, btn, true, 2)
+    text(ctx, 'НАЧАТЬ СМЕНУ ЗАНОВО', btn.x + btn.w / 2, btn.y + btn.h / 2, {
+      size: 12,
+      bold: true,
+      align: 'center',
+    })
+  }
+
+  /** Она выбралась: конец демо-версии. */
+  private drawEscaped(): void {
+    const ctx = this.ctx
+    fill(ctx, { x: 0, y: 0, w: DESKTOP_W, h: DESKTOP_H }, '#070c08')
+    text(ctx, 'ОНА УШЛА', DESKTOP_W / 2, DESKTOP_H / 2 - 30, {
+      size: 34,
+      bold: true,
+      color: '#9fd39f',
+      align: 'center',
+    })
+    text(ctx, 'пароль подошёл, дверь позади. кто-то же должен был её спасти.', DESKTOP_W / 2, DESKTOP_H / 2 + 8, {
+      size: 12,
+      color: '#7e8c80',
+      align: 'center',
+    })
+    const btn: Rect = { x: DESKTOP_W / 2 - 110, y: DESKTOP_H / 2 + 44, w: 220, h: 30 }
+    panel(ctx, btn, true, 2)
+    text(ctx, 'ПРОСМОТРЕТЬ ЗАНОВО', btn.x + btn.w / 2, btn.y + btn.h / 2, {
+      size: 12,
+      bold: true,
+      align: 'center',
+    })
   }
 
   /** Горизонтальные полосы CRT поверх всего рабочего стола. */
@@ -345,6 +418,7 @@ export class Desktop {
       browser.onUnlockDoor = () => this.unlockDoor()
       browser.onPairsFail = () => this.pairsLost()
       browser.onPrintCode = (code) => this.printCode(code)
+      browser.onPassword = (code) => getCctv().setExitCode(code)
       return browser
     }
     if (key === 'mail') return this.getMail()
@@ -1122,12 +1196,16 @@ export class Desktop {
   /** Сайт пар напечатал бумажку: код уходит на принтер в кухне. */
   private printCode(code: string): void {
     this.printedCode = code
+    getCctv().print(code)
     this.dirty = true
   }
 
-  /** Головоломка-пары проиграна: маньяк проснулся (сцену двигает кухня). */
+  /** Головоломка-пары проиграна: мурзик, маньяк и «ВЫ ПРОИГРАЛИ». */
   private pairsLost(): void {
     this.pairsLostFlag = true
+    this.sound.playMurzik()
+    getCctv().maniacAttack()
+    this.deadAt = performance.now() + 4200
     this.dirty = true
   }
 
@@ -1261,6 +1339,12 @@ export class Desktop {
     this.pointer.y = y
     this.pointer.over = true
     this.clickOpen = null
+
+    // Конец демо или смерть: любой клик перезапускает смену.
+    if (this.girlDead || this.escaped) {
+      location.reload()
+      return
+    }
 
     // Модальное окно установки перекрывает рабочий стол целиком.
     if (this.install) return

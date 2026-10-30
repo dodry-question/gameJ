@@ -108,6 +108,8 @@ export class Browser implements App {
   onPairsFail?: () => void
   /** Нажата «Печать»: код с бумажки уходит на принтер в кухне. */
   onPrintCode?: (code: string) => void
+  /** Пароль выхода показан на сайте — дверь кухни его запомнит. */
+  onPassword?: (code: string) => void
 
   constructor(sound: Sound) {
     this.sound = sound
@@ -116,6 +118,7 @@ export class Browser implements App {
     this.pairs = new PairsGame(sound)
     this.pairs.onFail = () => this.onPairsFail?.()
     this.pairs.onPrint = (code) => this.onPrintCode?.(code)
+    this.pairs.onPassword = (code) => this.onPassword?.(code)
     ;(window as unknown as { __browser?: Browser }).__browser = this
   }
 

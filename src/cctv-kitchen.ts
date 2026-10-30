@@ -27,7 +27,27 @@ export type Kitchen = {
   /** Качающаяся группа: провод + плафон. */
   lampPivot: THREE.Group
   exitDoor: THREE.Mesh
+  /** Дверца холодильника: открывается, когда она осматривает. */
+  fridgeDoor: THREE.Object3D
+  /** Кусок мяса внутри холодильника: появляется после осмотра. */
+  meat: THREE.Object3D
+  /** Железка с адресом: появляется вместо мяса после разделки. */
+  plate: THREE.Object3D
+  /** Бумажка из принтера: выезжает при печати. */
+  paper: THREE.Object3D
+  /** Диод принтера: мигает во время печати. */
+  printerLed: THREE.Mesh
+  /** Фигура маньяка: скрыта, пока не нападёт. */
+  maniac: THREE.Group
   update(dt: number, time: number): void
+  /** Открыть/закрыть дверцу холодильника. */
+  setFridgeOpen(open: boolean): void
+  /** Открыть/закрыть дверь выхода. */
+  setExitOpen(open: boolean): void
+  /** Запустить печать: диод замигает, бумажка выползет. */
+  startPrint(): void
+  readonly paperReady: boolean
+  hidePaper(): void
 }
 
 /** Границы пола кухни по z: за коридором (тот кончается на −9.2). */
@@ -156,15 +176,19 @@ export function buildKitchen(scene: THREE.Scene): Kitchen {
   const fridge = new THREE.Mesh(new THREE.BoxGeometry(0.85, 1.8, 0.8), fridgeMat)
   fridge.position.set(1.72, 0.9, -11.2)
   g.add(fridge)
+  // дверца на петле: открывается при «Осмотри»
+  const fridgeDoorPivot = new THREE.Group()
+  fridgeDoorPivot.position.set(1.31, 1.05, -11.55)
   const fridgeDoor = new THREE.Mesh(new THREE.BoxGeometry(0.06, 1.5, 0.74), fridgeMat)
-  fridgeDoor.position.set(1.28, 1.05, -11.2)
-  g.add(fridgeDoor)
+  fridgeDoor.position.set(0, 0, 0.37)
+  fridgeDoorPivot.add(fridgeDoor)
   const fridgeHandle = new THREE.Mesh(
     new THREE.BoxGeometry(0.04, 0.4, 0.05),
     new THREE.MeshLambertMaterial({ color: 0x54585a }),
   )
-  fridgeHandle.position.set(1.24, 1.25, -11.5)
-  g.add(fridgeHandle)
+  fridgeHandle.position.set(0, 0.2, 0.7)
+  fridgeDoorPivot.add(fridgeHandle)
+  g.add(fridgeDoorPivot)
   // магнитики и наклейки — кухня жилая
   for (const [dz, color] of [
     [-11.35, 0xb23a2e],
@@ -178,6 +202,34 @@ export function buildKitchen(scene: THREE.Scene): Kitchen {
     mag.position.set(1.245, 1.5, dz)
     g.add(mag)
   }
+
+  // мясо на полке: видно, когда дверца открыта
+  const meat = new THREE.Group()
+  const meatBody = new THREE.Mesh(
+    new THREE.SphereGeometry(0.14, 10, 8),
+    new THREE.MeshLambertMaterial({ color: 0xa03630 }),
+  )
+  meatBody.scale.set(1.25, 0.75, 0.9)
+  meat.add(meatBody)
+  const bone = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.03, 0.03, 0.16, 6),
+    new THREE.MeshLambertMaterial({ color: 0xd9d0c0 }),
+  )
+  bone.rotation.z = Math.PI / 2
+  bone.position.set(0.2, 0.02, 0.04)
+  meat.add(bone)
+  meat.position.set(1.5, 1.15, -11.2)
+  meat.visible = false
+  g.add(meat)
+
+  // железка с адресом: остаётся на столе после разделки
+  const plate = new THREE.Mesh(
+    new THREE.BoxGeometry(0.22, 0.015, 0.14),
+    new THREE.MeshLambertMaterial({ color: 0x7d8288 }),
+  )
+  plate.position.set(1.5, 1.16, -11.2)
+  plate.visible = false
+  g.add(plate)
 
   // ── разогревательная плита ────────────────────────────────────────
   const stove = new THREE.Group()
@@ -228,6 +280,14 @@ export function buildKitchen(scene: THREE.Scene): Kitchen {
   )
   led.position.set(0.2, 0.08, 0.23)
   printer.add(led)
+  // бумажка с паролем: выезжает из щели во время печати
+  const paper = new THREE.Mesh(
+    new THREE.BoxGeometry(0.26, 0.012, 0.3),
+    new THREE.MeshLambertMaterial({ color: 0xe8e4d4 }),
+  )
+  paper.position.set(0, 0.17, 0.1)
+  paper.visible = false
+  printer.add(paper)
   // наклейка с адресом на боку принтера
   const sticker = new THREE.Mesh(
     new THREE.PlaneGeometry(0.26, 0.09),
@@ -240,12 +300,15 @@ export function buildKitchen(scene: THREE.Scene): Kitchen {
 
   // ── выход: металлическая дверь с кодовой панелью (по центру задней
   // стены, иначе из кадра КАМ-05 её закрывает холодильник) ────────────
+  const exitPivot = new THREE.Group()
+  exitPivot.position.set(-0.475, 0, KITCHEN.z0 + 0.15)
   const exitDoor = new THREE.Mesh(
     new THREE.BoxGeometry(0.95, 2.1, 0.08),
     new THREE.MeshLambertMaterial({ color: 0x3d4448 }),
   )
-  exitDoor.position.set(0, 1.05, KITCHEN.z0 + 0.15)
-  g.add(exitDoor)
+  exitDoor.position.set(0.475, 1.05, 0)
+  exitPivot.add(exitDoor)
+  g.add(exitPivot)
   const keypad = new THREE.Group()
   const kpad = new THREE.Mesh(
     new THREE.BoxGeometry(0.16, 0.22, 0.04),
@@ -315,12 +378,55 @@ export function buildKitchen(scene: THREE.Scene): Kitchen {
   const objects: KitchenObject[] = [
     { id: 'knife', label: 'НОЖ', mesh: knife, stand: [-0.45, -10.4], yaw: -2.3 },
     { id: 'fridge', label: 'ХОЛОДИЛЬНИК', mesh: fridge, stand: [1.05, -11.2], yaw: Math.PI / 2 },
+    { id: 'meat', label: 'МЯСО', mesh: meat, stand: [1.05, -11.2], yaw: Math.PI / 2 },
     { id: 'stove', label: 'ПЛИТА', mesh: stove, stand: [1.05, -10.0], yaw: Math.PI / 2 },
     { id: 'printer', label: 'ПРИНТЕР', mesh: printer, stand: [-1.0, -11.85], yaw: 0.9 },
     { id: 'exit', label: 'ДВЕРЬ', mesh: exitDoor, stand: [0.0, -12.15], yaw: Math.PI },
   ]
 
-  // качание и моргание
+  // ── маньяк: тёмная фигура, бросается из проёма при провале ────────
+  const maniac = new THREE.Group()
+  const maniacMat = new THREE.MeshLambertMaterial({ color: 0x101317 })
+  const torso = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.2, 0.62, 7), maniacMat)
+  torso.position.y = 1.15
+  maniac.add(torso)
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.11, 8, 6), maniacMat)
+  head.position.y = 1.62
+  maniac.add(head)
+  for (const [lx, lz] of [
+    [-0.09, 0],
+    [0.09, 0],
+  ]) {
+    const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.05, 0.85, 6), maniacMat)
+    leg.position.set(lx, 0.42, lz)
+    maniac.add(leg)
+  }
+  const armL = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.04, 0.6, 6), maniacMat)
+  armL.position.set(-0.26, 1.2, 0)
+  armL.rotation.z = 0.35
+  maniac.add(armL)
+  const armR = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.04, 0.6, 6), maniacMat)
+  armR.position.set(0.26, 1.25, 0)
+  armR.rotation.z = -0.5
+  maniac.add(armR)
+  // нож в руке
+  const mKnife = new THREE.Mesh(
+    new THREE.BoxGeometry(0.04, 0.26, 0.02),
+    new THREE.MeshLambertMaterial({ color: 0xaeb4ba }),
+  )
+  mKnife.position.set(0.34, 1.05, 0.05)
+  mKnife.rotation.z = -0.9
+  maniac.add(mKnife)
+  maniac.visible = false
+  g.add(maniac)
+
+  // ── анимации кухни ────────────────────────────────────────────────
+  let fridgeOpenT = 0 // 0 закрыта → 1 открыта
+  let fridgeTarget = 0
+  let exitOpenT = 0
+  let exitTarget = 0
+  let printLeft = 0 // сколько секунд ещё печатает
+  let paperOutT = 0 // 0 убрана → 1 полностью вышла
   let blinkNext = 6 + Math.random() * 10
   let blinkUntil = 0
   const update = (dt: number, time: number): void => {
@@ -336,9 +442,60 @@ export function buildKitchen(scene: THREE.Scene): Kitchen {
     const on = time > blinkUntil ? 1 : 0
     lamp.intensity = 16 * flick * on
     ;(bulb.material as THREE.MeshBasicMaterial).color.setHex(on ? 0xffe9b0 : 0x3a352a)
+
+    // дверца холодильника и дверь выхода
+    fridgeOpenT += (fridgeTarget - fridgeOpenT) * Math.min(1, dt * 4)
+    fridgeDoorPivot.rotation.y = fridgeOpenT * 1.9
+    exitOpenT += (exitTarget - exitOpenT) * Math.min(1, dt * 2.4)
+    exitPivot.rotation.y = -exitOpenT * 1.5
+
+    // печать: диод мигает, бумажка выползает
+    if (printLeft > 0) {
+      printLeft -= dt
+      const blink = Math.floor(time * 6) % 2 === 0
+      ;(led.material as THREE.MeshBasicMaterial).color.setHex(blink ? 0xd8b25a : 0x2a2c24)
+      if (printLeft <= 1.2) {
+        paper.visible = true
+        paperOutT = Math.min(1, paperOutT + dt * 1.4)
+        paper.position.z = 0.1 + paperOutT * 0.24
+      }
+    } else {
+      ;(led.material as THREE.MeshBasicMaterial).color.setHex(0x4f8f57)
+    }
   }
 
-  return { objects, lamp, lampPivot, exitDoor, update }
+  return {
+    objects,
+    lamp,
+    lampPivot,
+    exitDoor,
+    fridgeDoor: fridgeDoorPivot,
+    meat,
+    plate,
+    paper,
+    printerLed: led,
+    maniac,
+    update,
+    setFridgeOpen(open: boolean): void {
+      fridgeTarget = open ? 1 : 0
+    },
+    setExitOpen(open: boolean): void {
+      exitTarget = open ? 1 : 0
+    },
+    startPrint(): void {
+      printLeft = 2.8
+      paperOutT = 0
+      paper.visible = false
+      paper.position.z = 0.1
+    },
+    get paperReady(): boolean {
+      return paperOutT >= 1
+    },
+    hidePaper(): void {
+      paper.visible = false
+      paperOutT = 0
+    },
+  }
 }
 
 /** Текст-текстура «адрес на наклейке принтера». */
