@@ -10,6 +10,7 @@ import { C, bevel, fill, inside, panel, setFont, text, wrap } from '../draw'
 import type { Rect } from '../draw'
 import type { App } from '../app'
 import type { Sound } from '../../audio'
+import { LockGame } from './lock-game'
 
 type Page =
   | 'home'
@@ -20,6 +21,7 @@ type Page =
   | 'gate'
   | 'mail'
   | 'help'
+  | 'lock'
   | 'error'
   | 'external'
   | 'notfound'
@@ -40,6 +42,7 @@ const URLS = {
   gate: 'http://intranet.local/gate/',
   mail: 'http://intranet.local/mail/',
   help: 'http://intranet.local/help/',
+  lock: 'http://lockreset.local/',
   error: 'http://192.168.0.13/gate/',
 } as const
 
@@ -92,9 +95,16 @@ export class Browser implements App {
   private t = 0
   private status = 'готово'
   private sound: Sound
+  /** Мини-игра сброса замка; победа уходит рабочему столу, тот отпирает дверь. */
+  private game: LockGame
+  /** Вызывается, когда мини-игра сняла блокировку двери. */
+  onUnlockDoor?: () => void
 
   constructor(sound: Sound) {
     this.sound = sound
+    this.game = new LockGame(sound)
+    this.game.onWin = () => this.onUnlockDoor?.()
+    ;(window as unknown as { __browser?: Browser }).__browser = this
   }
 
   draw(ctx: CanvasRenderingContext2D, r: Rect): void {
@@ -143,6 +153,9 @@ export class Browser implements App {
       case 'help':
         this.drawHelp(ctx, page)
         break
+      case 'lock':
+        this.drawLock(ctx, page)
+        break
       case 'external':
         this.drawExternal(ctx, page)
         break
@@ -162,12 +175,15 @@ export class Browser implements App {
     })
   }
 
-  /** Анимация загрузки страниц. */
+  /** Анимация загрузки страниц и тик мини-игры на странице замка. */
   tick(): boolean {
-    if (this.loading <= 0) return false
-    this.t += 0.016
-    this.loading = Math.max(0, this.loading - 0.016)
-    return true
+    if (this.loading > 0) {
+      this.t += 0.016
+      this.loading = Math.max(0, this.loading - 0.016)
+      return true
+    }
+    if (this.page === 'lock') return this.game.tick()
+    return false
   }
 
   // ── навигация ────────────────────────────────────────────────────
@@ -197,6 +213,7 @@ export class Browser implements App {
     if (page === 'error') return 'ошибка загрузки'
     if (page === 'notfound') return 'документ не найден'
     if (page === 'external') return 'внешняя сеть'
+    if (page === 'lock') return 'панель сброса замка'
     return 'готово'
   }
 
@@ -215,6 +232,9 @@ export class Browser implements App {
   private route(url: string): Page {
     const low = url.toLowerCase()
     if (low === 'about:help') return 'help'
+    if (low.startsWith('http://lockreset.local') || low.startsWith('https://lockreset.local')) {
+      return 'lock'
+    }
     if (low.startsWith('http://intranet.local') || low.startsWith('https://intranet.local')) {
       const path = low.replace(/^https?:\/\/intranet\.local/, '').split(/[?#]/)[0]
       if (path === '' || path === '/') return 'home'
@@ -301,6 +321,8 @@ export class Browser implements App {
   }
 
   key(e: KeyboardEvent): boolean {
+    // На странице замка клавиши уходят мини-игре, если не набран адрес.
+    if (this.page === 'lock' && !this.focus) return this.game.key(e)
     if (!this.focus) return false
     const value = this.editValue
 
@@ -1153,6 +1175,33 @@ export class Browser implements App {
     this.link(ctx, '← На главную', x, y, () => this.go('home'))
   }
 
+  /** Страница lockreset.local: тёмная панель сброса замка с мини-игрой. */
+  private drawLock(ctx: CanvasRenderingContext2D, p: Rect): void {
+    fill(ctx, p, '#050d08')
+
+    const head = 26
+    fill(ctx, { x: p.x, y: p.y, w: p.w, h: head }, '#08140c')
+    ctx.strokeStyle = 'rgba(126, 154, 132, 0.35)'
+    ctx.beginPath()
+    ctx.moveTo(p.x, p.y + head - 0.5)
+    ctx.lineTo(p.x + p.w, p.y + head - 0.5)
+    ctx.stroke()
+    setFont(ctx, 11, true)
+    ctx.fillStyle = '#9fd39f'
+    ctx.textBaseline = 'middle'
+    ctx.fillText('ПАНЕЛЬ СБРОСА БЛОКИРОВКИ · lockreset.local', p.x + 12, p.y + head / 2 + 1)
+
+    if (this.loading > 0) {
+      text(ctx, 'соединение…', p.x + p.w / 2, p.y + head + (p.h - head) / 2, {
+        size: 12,
+        color: '#5f6f62',
+        align: 'center',
+      })
+      return
+    }
+    this.game.draw(ctx, { x: p.x, y: p.y + head, w: p.w, h: p.h - head })
+  }
+
   private drawHelp(ctx: CanvasRenderingContext2D, p: Rect): void {
     const x = p.x + 20
     let y = p.y + 26
@@ -1291,6 +1340,7 @@ export class Browser implements App {
     }
     this.focus = null
     this.selectAll = false
+    if (this.page === 'lock' && this.game.click(x, y)) return
     for (let i = this.hits.length - 1; i >= 0; i--) {
       if (inside(this.hits[i].r, x, y)) {
         this.hits[i].fn()

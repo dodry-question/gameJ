@@ -29,6 +29,8 @@ export class Tds implements App {
   title = 'TDS · терминал наблюдения'
   /** Первый живой кадр: сценарий присылает письмо похитителей. */
   onFirstView?: () => void
+  /** Нажата «Открыть дверь»: терминал отдаёт адрес панели сброса. */
+  onDoorRequest?: () => void
 
   private screen: Screen = 'map'
   private map = new TdsMap()
@@ -44,12 +46,18 @@ export class Tds implements App {
   constructor(sound: Sound) {
     this.sound = sound
     this.feed = new CameraFeed(sound)
+    this.feed.onUnlock = () => this.onDoorRequest?.()
     ;(window as unknown as { __tds?: Tds }).__tds = this
   }
 
   /** Доступ к замку открывается после прочтения письма. */
   setAccess(allowed: boolean): void {
     this.feed.setAccess(allowed)
+  }
+
+  /** Замок снят в панели сброса: дверь отпирается (девушка выбегает). */
+  doorOpened(): void {
+    this.feed.unlock()
   }
 
   /** Виден ли сейчас прямой эфир — по этому включаются звуки камеры. */
@@ -72,8 +80,8 @@ export class Tds implements App {
   }
 
   /** Состояние экрана и точка узла 04 — для проверок из tools/. */
-  debugInfo(): { screen: Screen; cam: { x: number; y: number } | null } {
-    return { screen: this.screen, cam: this.map.point('04') }
+  debugInfo(): { screen: Screen; cam: { x: number; y: number } | null; door: boolean } {
+    return { screen: this.screen, cam: this.map.point('04'), door: this.feed.releasedGirl }
   }
 
   tick(): boolean {

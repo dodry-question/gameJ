@@ -1,8 +1,9 @@
 /**
  * «Мой компьютер» — проводник в стиле Windows 2000.
  *
- * Дерево пока плоское: корень и базовые папки (Загрузки, Документы, Музыка,
- * Изображения, Видео). Внутри папок пусто — наполнятся по ходу игры.
+ * Папки: Загрузки, Документы, Музыка, Изображения, Видео. Файлы выдаёт
+ * рабочий стол: по ходу игры появляются tds.exe в Загрузках, дверь.txt
+ * с адресом панели сброса в Загрузках и Документах, пасхалка в Изображениях.
  */
 import { C, bevel, fill, inside, panel, text } from '../draw'
 import type { Rect } from '../draw'
@@ -10,15 +11,22 @@ import type { App } from '../app'
 import type { Sound } from '../../audio'
 import { drawIcon } from '../icons'
 
-type Node = { name: string; kind: 'folder' | 'file' }
+export type DeskFile = {
+  folder: string
+  name: string
+  kind: 'txt' | 'exe' | 'image'
+}
 
-const ROOT: Node[] = [
-  { name: 'Загрузки', kind: 'folder' },
-  { name: 'Документы', kind: 'folder' },
-  { name: 'Музыка', kind: 'folder' },
-  { name: 'Изображения', kind: 'folder' },
-  { name: 'Видео', kind: 'folder' },
-]
+type Node = { name: string; kind: 'folder' | 'txt' | 'exe' | 'image'; file?: DeskFile }
+
+const FOLDERS = ['Загрузки', 'Документы', 'Музыка', 'Изображения', 'Видео']
+
+const GLYPH: Record<Node['kind'], string> = {
+  folder: 'folder',
+  txt: 'file',
+  exe: 'virus',
+  image: 'image',
+}
 
 type Hit = { r: Rect; fn: () => void }
 
@@ -27,13 +35,24 @@ export class Explorer implements App {
   private path: string[] = []
   private hits: Hit[] = []
   private sound: Sound
+  /** Файлы решает рабочий стол: он знает, что уже «скачано» и «сохранено». */
+  private files: () => DeskFile[]
+  private openFile: (file: DeskFile) => void
 
-  constructor(sound: Sound) {
+  constructor(sound: Sound, files: () => DeskFile[], openFile: (file: DeskFile) => void) {
     this.sound = sound
+    this.files = files
+    this.openFile = openFile
   }
 
   private get items(): Node[] {
-    return this.path.length === 0 ? ROOT : []
+    if (this.path.length === 0) {
+      return FOLDERS.map((name) => ({ name, kind: 'folder' as const }))
+    }
+    const folder = this.path[this.path.length - 1]
+    return this.files()
+      .filter((f) => f.folder === folder)
+      .map((f) => ({ name: f.name, kind: f.kind, file: f }))
   }
 
   draw(ctx: CanvasRenderingContext2D, r: Rect): void {
@@ -52,7 +71,7 @@ export class Explorer implements App {
     const count = this.items.length
     text(
       ctx,
-      this.path.length ? 'Папка пуста' : `Объектов: ${count}`,
+      this.path.length ? (count ? `Объектов: ${count}` : 'Папка пуста') : `Объектов: ${count}`,
       status.x + 8,
       status.y + status.h / 2,
       { size: 10, color: C.textDim },
@@ -115,11 +134,6 @@ export class Explorer implements App {
         color: C.textDim,
         align: 'center',
       })
-      text(ctx, 'Файлы появятся здесь позже.', cx, r.y + r.h / 2 + 8, {
-        size: 11,
-        color: C.textDim,
-        align: 'center',
-      })
       return
     }
 
@@ -129,7 +143,7 @@ export class Explorer implements App {
     items.forEach((node, i) => {
       const x = r.x + 10 + (i % cols) * cw
       const y = r.y + 10 + Math.floor(i / cols) * ch
-      drawIcon(ctx, node.kind === 'folder' ? 'folder' : 'file', x + 24, y + 24, 1.5)
+      drawIcon(ctx, GLYPH[node.kind], x + 24, y + 24, 1.5)
       text(ctx, node.name, x + 24, y + 58, { size: 11, color: C.ink, align: 'center' })
       this.hits.push({
         r: { x, y, w: cw - 8, h: ch - 6 },
@@ -137,8 +151,9 @@ export class Explorer implements App {
           if (node.kind === 'folder') {
             this.path.push(node.name)
             this.sound.open()
-          } else {
-            this.sound.error()
+          } else if (node.file) {
+            this.sound.click()
+            this.openFile(node.file)
           }
         },
       })

@@ -40,6 +40,16 @@ export class Notepad implements App {
     this.anchor = this.caret
   }
 
+  /** Заменить содержимое открытого блокнота (файл из проводника, URL двери). */
+  setContent(fileName: string, text: string): void {
+    this.text = text
+    this.title = fileName ? `${fileName} — Блокнот` : 'Блокнот'
+    this.caret = this.text.length
+    this.anchor = this.caret
+    this.scroll = 0
+    this.status = ''
+  }
+
   // ── выделение и позиции ──────────────────────────────────────────
 
   private get selStart(): number {

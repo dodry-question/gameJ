@@ -191,11 +191,11 @@ export class Sound {
     src.stop(t + dur + 0.02)
   }
 
-  private tone(freq: number, dur: number, type: OscillatorType, gain: number, slideTo?: number): void {
+  private tone(freq: number, dur: number, type: OscillatorType, gain: number, slideTo?: number, when = 0): void {
     const ctx = this.ctx
     const out = this.master
     if (!ctx || !out) return
-    const t = ctx.currentTime
+    const t = ctx.currentTime + when
     const osc = ctx.createOscillator()
     osc.type = type
     osc.frequency.setValueAtTime(freq, t)
@@ -255,6 +255,74 @@ export class Sound {
     this.tick(700, 2.2, 0.028, 0.022, 0.14)
     this.tick(1080, 2.8, 0.02, 0.016, 0.21)
     this.tone(52, 0.5, 'sine', 0.012)
+  }
+
+  // ── панель сброса замка (lockreset.local) ─────────────────────────
+
+  /** Шаг курсора по схеме: тихий щелчок реле. */
+  step(): void {
+    this.tick(1600, 2.2, 0.014, 0.02)
+  }
+
+  /** Удар по заражённому узлу: треск и низкий спад. */
+  zapHit(): void {
+    this.tick(1900, 1.1, 0.06, 0.04)
+    this.tone(340, 0.09, 'sawtooth', 0.045, 110)
+  }
+
+  /** Узел очищен: лопнувший burst и звонкая точка. */
+  nodeCleared(): void {
+    this.tone(620, 0.22, 'square', 0.035, 140)
+    this.tick(900, 0.9, 0.05, 0.09)
+    this.bell(1568, 0.18, 0.03, 0.7, 0.05)
+  }
+
+  /** Заражённый узел выслали импульс: короткий сонар. */
+  impulsePing(): void {
+    this.bell(660, 0.4, 0.028, 0.5)
+    this.tone(196, 0.45, 'sine', 0.018)
+  }
+
+  /** Импульс поглощён сервером: мягкий «поп». */
+  impulseAbsorbed(): void {
+    this.bell(784, 0.1, 0.03, 0.8)
+    this.tick(2600, 1.6, 0.03, 0.03)
+  }
+
+  /** Импульс дошёл без игрока: пробой контура. */
+  impulseBreach(): void {
+    this.tone(130, 0.5, 'sawtooth', 0.075, 62)
+    this.tone(98, 0.7, 'sawtooth', 0.06, 52, 0.12)
+    this.bell(147, 0.5, 0.05, 1.4, 0.05)
+  }
+
+  /** Удар ПРОБЕЛОМ в такт волне: мгновенная зарядка. */
+  reloadPerfect(): void {
+    this.tick(3200, 1.2, 0.04, 0.05)
+    this.bell(880, 0.12, 0.05, 1)
+    this.bell(1319, 0.16, 0.045, 0.9, 0.08)
+    this.bell(1760, 0.26, 0.04, 0.8, 0.16)
+  }
+
+  /** Промах по волне: короткое замыкание — гул и искры. */
+  shortZap(): void {
+    this.tone(70, 0.55, 'sawtooth', 0.08)
+    this.tick(2800, 0.7, 0.06, 0.06)
+    this.tick(2200, 0.9, 0.05, 0.05, 0.09)
+    this.tick(3100, 1.1, 0.045, 0.04, 0.16)
+  }
+
+  /** Отказ действия: нет заряда. */
+  deny(): void {
+    this.bell(220, 0.14, 0.04, 1.2)
+  }
+
+  /** Замок снят: финальный перезвон. */
+  lockReleased(): void {
+    this.bell(523, 0.16, 0.05, 1)
+    this.bell(659, 0.16, 0.05, 1, 0.11)
+    this.bell(784, 0.2, 0.05, 1, 0.22)
+    this.bell(1047, 0.5, 0.05, 0.9, 0.33)
   }
 
   // ── модем ────────────────────────────────────────────────────────

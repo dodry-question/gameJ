@@ -36,6 +36,12 @@ export class CameraFeed {
   private debugDoor = false
   private noise: HTMLCanvasElement
 
+  /**
+   * Кнопка «Открыть дверь» больше не отпирает замок сама: терминал выдаёт
+   * адрес панели сброса. Если колбэка нет — работаем по-старому.
+   */
+  onUnlock?: () => void
+
   constructor(sound: Sound) {
     this.sound = sound
     this.noise = this.makeNoise()
@@ -49,6 +55,20 @@ export class CameraFeed {
 
   get releasedGirl(): boolean {
     return this.phase === 'open'
+  }
+
+  /** Замок снят (в браузере или отладчиком): дверь отпирается. */
+  unlock(): void {
+    if (this.phase === 'open') return
+    const wasUntied = this.phase === 'untied'
+    this.phase = 'open'
+    this.released = 0
+    // выпуск только если она уже отвязана: переоткрытый терминал не должен
+    // возвращать девушку к стулу
+    if (wasUntied) {
+      this.cctv?.release()
+      this.sound.open()
+    }
   }
 
   /** Начать приём картинки заново. */
@@ -244,10 +264,8 @@ export class CameraFeed {
       this.hits.push({
         r: btn,
         fn: () => {
-          this.phase = 'open'
-          this.released = 0
-          this.cctv?.release()
-          this.sound.open()
+          if (this.onUnlock) this.onUnlock()
+          else this.unlock()
         },
       })
     }

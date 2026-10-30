@@ -4,6 +4,8 @@ import { drawIcon } from './icons'
 import type { App } from './app'
 import { Browser } from './apps/browser'
 import { Explorer } from './apps/explorer'
+import type { DeskFile } from './apps/explorer'
+import { ImageViewer } from './apps/image-viewer'
 import { Mail } from './apps/mail'
 import { Note } from './apps/note'
 import { Notepad } from './apps/notepad'
@@ -15,6 +17,26 @@ export const DESKTOP_H = 720
 
 const TASKBAR = 30
 const TITLE = 20
+
+/** Адрес панели сброса замка: терминал выдаёт его блокнотом. */
+const LOCK_URL = 'http://lockreset.local/'
+
+const DOOR_NOTE = [
+  'TDS 2.1 · СБРОС БЛОКИРОВКИ ДВЕРИ',
+  '--------------------------------',
+  '',
+  'Замок двери блока C заражен: аномальные узлы',
+  'шлют сигнал блокировки на сервер терминала.',
+  '',
+  'Панель сброса:',
+  `    ${LOCK_URL}`,
+  '',
+  '1. Скопируй адрес.',
+  '2. Вставь его в Netscape Navigator и открой.',
+  '3. Очисти все зараженные узлы на схеме.',
+  '',
+  'Дверь отопрется автоматически.',
+].join('\n')
 
 /** Размер ячейки ярлыка: 64 px значок + подпись в две строки. */
 const ICON_W = 88
@@ -28,6 +50,7 @@ const LAUNCH_MS: Record<string, number> = {
   notepad: 650,
   computer: 550,
   trash: 450,
+  image: 450,
 }
 
 type Win = {
@@ -62,6 +85,7 @@ const SIZES: Record<string, Rect> = {
   notepad: { x: 190, y: 84, w: 540, h: 420 },
   computer: { x: 280, y: 110, w: 580, h: 400 },
   trash: { x: 300, y: 190, w: 350, h: 180 },
+  image: { x: 230, y: 100, w: 500, h: 510 },
 }
 
 /** Терминал открывается развёрнутым: карта должна занимать весь экран. */
@@ -153,6 +177,11 @@ export class Desktop {
   private install: Install | null = null
   private threatSent = false
   private cameraAccess = false
+
+  // сброс замка двери: адрес выдан блокнотом, дверь отперта
+  private unlockNoteSent = false
+  private doorUnlocked = false
+  private pendingNote: { name: string; text: string } | null = null
 
   private drag: { win: Win; ox: number; oy: number } | null = null
   /** Протяжка внутри окна: выделение текста в блокноте. */
@@ -305,16 +334,25 @@ export class Desktop {
   // ── окна ─────────────────────────────────────────────────────────
 
   private makeApp(key: string): App {
-    if (key === 'browser') return new Browser(this.sound)
+    if (key === 'browser') {
+      const browser = new Browser(this.sound)
+      browser.onUnlockDoor = () => this.unlockDoor()
+      return browser
+    }
     if (key === 'mail') return this.getMail()
     if (key === 'tds') {
       const tds = new Tds(this.sound)
       tds.setAccess(this.cameraAccess)
+      if (this.doorUnlocked) tds.doorOpened()
       tds.onFirstView = () => this.triggerThreat()
+      tds.onDoorRequest = () => this.openDoorNote()
       return tds
     }
     if (key === 'notepad') return new Notepad()
-    if (key === 'computer') return new Explorer(this.sound)
+    if (key === 'computer') {
+      return new Explorer(this.sound, () => this.explorerFiles(), (file) => this.openDeskFile(file))
+    }
+    if (key === 'image') return new ImageViewer('208013669.jpg', 'images/208013669.jpg')
     return new Note('Корзина', ['Корзина пуста.', '', 'Здесь ничего нет. Пока.'])
   }
 
@@ -356,6 +394,10 @@ export class Desktop {
     if (!app) {
       app = this.makeApp(key)
       this.cache.set(key, app)
+    }
+    if (key === 'notepad' && this.pendingNote && app instanceof Notepad) {
+      app.setContent(this.pendingNote.name, this.pendingNote.text)
+      this.pendingNote = null
     }
     const s = SIZES[key] ?? { x: 260, y: 160, w: 340, h: 200 }
     const max = MAX_ON_OPEN.has(key)
@@ -976,6 +1018,72 @@ export class Desktop {
     this.dirty = true
   }
 
+  // ── сброс замка двери ────────────────────────────────────────────
+
+  /**
+   * Нажата «Открыть дверь» в терминале. Замок заражен, поэтому терминал не
+   * отпирает дверь, а выдаёт адрес панели сброса: блокнот с адресом и файл
+   * дверь.txt в Загрузках и Документах. Повторные нажатия просто открывают
+   * блокнот снова.
+   */
+  private openDoorNote(): void {
+    if (!this.unlockNoteSent) {
+      this.unlockNoteSent = true
+      this.dirty = true
+    }
+    this.openNotepadWith('дверь.txt', DOOR_NOTE)
+  }
+
+  /** Открыть блокнот с готовым текстом: существующее окно или новое. */
+  private openNotepadWith(name: string, body: string): void {
+    const existing = this.windows.find((w) => w.key === 'notepad')
+    if (existing) {
+      if (existing.app instanceof Notepad) existing.app.setContent(name, body)
+      existing.min = false
+      this.raise(existing)
+      this.sound.open()
+      this.dirty = true
+      return
+    }
+    this.pendingNote = { name, text: body }
+    this.open('notepad')
+  }
+
+  /** Файл открыт из проводника: текст — в блокнот, картинку — в просмотр. */
+  private openDeskFile(file: DeskFile): void {
+    if (file.kind === 'txt') this.openNotepadWith(file.name, DOOR_NOTE)
+    else if (file.kind === 'image') this.open('image')
+    else this.open('tds')
+  }
+
+  /** Содержимое папок «Мой компьютер»: растёт по ходу игры. */
+  private explorerFiles(): DeskFile[] {
+    const files: DeskFile[] = [{ folder: 'Изображения', name: '208013669.jpg', kind: 'image' }]
+    if (this.icons.some((i) => i.id === 'tds')) {
+      files.push({ folder: 'Загрузки', name: 'tds.exe', kind: 'exe' })
+    }
+    if (this.unlockNoteSent) {
+      files.push({ folder: 'Загрузки', name: 'дверь.txt', kind: 'txt' })
+      files.push({ folder: 'Документы', name: 'дверь.txt', kind: 'txt' })
+    }
+    return files
+  }
+
+  /** Мини-игра на lockreset.local сняла блокировку: дверь отпирается. */
+  private unlockDoor(): void {
+    if (this.doorUnlocked) return
+    this.doorUnlocked = true
+    for (const app of this.cache.values()) {
+      if (app instanceof Tds) app.doorOpened()
+    }
+    this.dirty = true
+  }
+
+  /** Состояние сценария замка — для проверок из tools/. */
+  debugInfo(): { unlockNote: boolean; door: boolean; files: DeskFile[] } {
+    return { unlockNote: this.unlockNoteSent, door: this.doorUnlocked, files: this.explorerFiles() }
+  }
+
   private toastRect(): Rect {
     return { x: DESKTOP_W - 300, y: DESKTOP_H - TASKBAR - 104, w: 292, h: 96 }
   }
@@ -1517,6 +1625,8 @@ export class Desktop {
   debugOpenCamera(): void {
     const app = new Tds(this.sound)
     app.setAccess(true)
+    app.onDoorRequest = () => this.openDoorNote()
+    if (this.doorUnlocked) app.doorOpened()
     this.cache.set('tds', app)
     this.spawn('tds')
     app.debugOpen()

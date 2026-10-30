@@ -457,6 +457,41 @@ const ICONS: Record<string, (p: Pix) => void> = {
   camera,
   map,
   virus,
+  image,
+}
+
+/** Фото: рамка с небом, солнцем и горами — файлы картинок. */
+function image(p: Pix): void {
+  const frame = rgba('#f7f5ea')
+  const frameLo = rgba('#c9c5b2')
+  const sky = rgba('#7fb4d8')
+  const sun = rgba('#ffd75e')
+  const hill = rgba('#4f7a3c')
+  const hillLo = rgba('#3a5c2c')
+  p.rect(4, 6, 24, 20, frame)
+  p.rect(5, 7, 22, 14, sky)
+  p.ellipse(21, 11, 3, 3, sun)
+  p.poly(
+    [
+      [5, 21],
+      [12, 12],
+      [18, 21],
+    ],
+    hill,
+  )
+  p.poly(
+    [
+      [14, 21],
+      [21, 14],
+      [27, 21],
+    ],
+    hillLo,
+  )
+  p.rect(5, 19, 22, 2, hillLo)
+  p.rect(4, 6, 24, 1, rgba('#ffffff'))
+  p.rect(4, 6, 1, 20, rgba('#ffffff'))
+  p.rect(27, 6, 1, 20, frameLo)
+  p.rect(4, 25, 24, 1, frameLo)
 }
 
 /** Карта: сложенный лист с планом блока и красной меткой. */
