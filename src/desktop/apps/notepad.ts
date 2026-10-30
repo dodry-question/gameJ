@@ -30,6 +30,8 @@ export class Notepad implements App {
   private dragging = false
   private hits: Hit[] = []
   private textRect: Rect | null = null
+  /** Белое поле целиком: с него тоже можно начинать выделение. */
+  private areaRect: Rect | null = null
   private charW = 8
   private status = ''
 
@@ -157,12 +159,19 @@ export class Notepad implements App {
   // ── буфер обмена ─────────────────────────────────────────────────
 
   private copy(): boolean {
-    if (!this.hasSelection) {
+    // Без выделения копируем весь текст: в игре это ожидаемее, чем молчание.
+    const value = this.hasSelection ? this.text.slice(this.selStart, this.selEnd) : this.text
+    if (!value) {
       this.status = 'нечего копировать'
       return false
     }
-    writeClipboard(this.text.slice(this.selStart, this.selEnd))
-    this.status = `скопировано: ${this.selEnd - this.selStart} симв.`
+    if (!writeClipboard(value)) {
+      this.status = 'браузер не дал доступ к буферу'
+      return false
+    }
+    this.status = this.hasSelection
+      ? `скопировано: ${value.length} симв.`
+      : `скопирован весь текст: ${value.length} симв.`
     return true
   }
 
@@ -172,7 +181,10 @@ export class Notepad implements App {
       return false
     }
     const n = this.selEnd - this.selStart
-    writeClipboard(this.text.slice(this.selStart, this.selEnd))
+    if (!writeClipboard(this.text.slice(this.selStart, this.selEnd))) {
+      this.status = 'браузер не дал доступ к буферу'
+      return false
+    }
     this.replaceSelection('')
     this.status = `вырезано: ${n} симв.`
     return true
@@ -296,7 +308,8 @@ export class Notepad implements App {
         return
       }
     }
-    if (this.textRect && inside(this.textRect, x, y)) {
+    const field = this.areaRect ?? this.textRect
+    if (field && inside(field, x, y)) {
       const pos = this.posAt(x, y)
       this.anchor = pos
       this.caret = pos
@@ -324,6 +337,7 @@ export class Notepad implements App {
     this.toolbar(ctx, { x: r.x, y: r.y, w: r.w, h: 26 })
 
     const area: Rect = { x: r.x + 2, y: r.y + 26, w: r.w - 4, h: r.h - 26 - 18 }
+    this.areaRect = area
     fill(ctx, area, '#ffffff')
     bevel(ctx, area, false, 1)
 

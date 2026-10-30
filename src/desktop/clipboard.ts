@@ -1,35 +1,42 @@
 /**
  * Системный буфер обмена.
  *
- * Основной путь — `navigator.clipboard`; если браузер его не даёт (или это
- * небезопасный контекст), копируем через скрытую textarea и `execCommand`.
+ * Сначала пробуем синхронный `execCommand('copy')`: он работает прямо внутри
+ * жеста пользователя и не требует разрешений — важно для iframe и Firefox.
+ * Если не вышло, идём через `navigator.clipboard`.
  */
-export function writeClipboard(text: string): void {
+export function writeClipboard(text: string): boolean {
+  if (legacyCopy(text)) return true
   try {
     if (navigator.clipboard?.writeText) {
-      void navigator.clipboard.writeText(text).catch(() => legacyCopy(text))
-      return
+      void navigator.clipboard.writeText(text).catch(() => {
+        // буфер недоступен — ничего не поделать
+      })
+      return true
     }
   } catch {
-    // ниже — запасной путь
+    // ниже — уже нечего пробовать
   }
-  legacyCopy(text)
+  return false
 }
 
-function legacyCopy(text: string): void {
+function legacyCopy(text: string): boolean {
   const ta = document.createElement('textarea')
   ta.value = text
   ta.style.position = 'fixed'
   ta.style.left = '-9999px'
   ta.style.top = '0'
   document.body.appendChild(ta)
+  ta.focus()
   ta.select()
+  let ok = false
   try {
-    document.execCommand('copy')
+    ok = document.execCommand('copy')
   } catch {
-    // буфер недоступен — ничего не поделать
+    // буфер недоступен
   }
   ta.remove()
+  return ok
 }
 
 export async function readClipboard(): Promise<string | null> {

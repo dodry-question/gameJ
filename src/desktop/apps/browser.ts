@@ -12,6 +12,7 @@ import type { App } from '../app'
 import type { Sound } from '../../audio'
 import { LockGame } from './lock-game'
 import { PairsGame, PrintSite } from './pairs-game'
+import { writeClipboard } from '../clipboard'
 
 type Page =
   | 'home'
@@ -433,6 +434,21 @@ export class Browser implements App {
     }
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
       this.selectAll = true
+      return true
+    }
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c') {
+      if (!this.editValue) return true
+      writeClipboard(this.editValue)
+      this.status = 'скопировано в буфер обмена'
+      return true
+    }
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'x') {
+      if (!this.editValue) return true
+      writeClipboard(this.editValue)
+      this.editValue = ''
+      this.caret = 0
+      this.selectAll = false
+      this.status = 'вырезано в буфер обмена'
       return true
     }
     if (e.ctrlKey || e.metaKey || e.altKey) return false
