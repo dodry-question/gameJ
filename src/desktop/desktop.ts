@@ -3,11 +3,11 @@ import type { Rect } from './draw'
 import { drawIcon } from './icons'
 import type { App } from './app'
 import { Browser } from './apps/browser'
-import { Camera } from './apps/camera'
 import { Explorer } from './apps/explorer'
 import { Mail } from './apps/mail'
-import { MapApp } from './apps/map'
 import { Note } from './apps/note'
+import { Notepad } from './apps/notepad'
+import { DOMAINS_TEXT } from './domains'
 import type { Sound } from '../audio'
 
 export const DESKTOP_W = 960
@@ -24,10 +24,10 @@ const ICON_H = 92
 const LAUNCH_MS: Record<string, number> = {
   browser: 1500,
   mail: 1100,
-  camera: 1300,
+  notepad: 650,
+  domains: 650,
   computer: 550,
   trash: 450,
-  map: 750,
 }
 
 type Win = {
@@ -58,15 +58,16 @@ type DeskIcon = {
 const SIZES: Record<string, Rect> = {
   browser: { x: 120, y: 52, w: 640, h: 486 },
   mail: { x: 250, y: 100, w: 620, h: 476 },
+  notepad: { x: 190, y: 84, w: 540, h: 420 },
+  domains: { x: 210, y: 96, w: 520, h: 390 },
   computer: { x: 280, y: 110, w: 580, h: 400 },
   trash: { x: 300, y: 190, w: 350, h: 180 },
-  camera: { x: 236, y: 86, w: 560, h: 470 },
-  map: { x: 668, y: 120, w: 280, h: 430 },
 }
 
 const START_ICONS: Array<Omit<DeskIcon, 'x' | 'y'>> = [
   { id: 'mail', label: 'Почта', glyph: 'mail', app: 'mail' },
   { id: 'browser', label: 'Интернет', glyph: 'browser', app: 'browser' },
+  { id: 'notepad', label: 'Блокнот', glyph: 'file', app: 'notepad' },
   { id: 'computer', label: 'Мой компьютер', glyph: 'computer', app: 'computer' },
   { id: 'trash', label: 'Корзина', glyph: 'trash', app: 'trash' },
 ]
@@ -74,6 +75,7 @@ const START_ICONS: Array<Omit<DeskIcon, 'x' | 'y'>> = [
 const START_MENU: MenuItem[] = [
   { label: 'Почта', key: 'mail' },
   { label: 'Netscape Navigator', key: 'browser' },
+  { label: 'Блокнот', key: 'notepad' },
   { label: 'Мой компьютер', key: 'computer' },
   null,
   { label: 'Документы' },
@@ -85,6 +87,8 @@ const START_MENU: MenuItem[] = [
 
 type IconDrag = {
   ids: string[]
+  /** Ярлык, за который взялись мышью: по нему считается сдвиг всей группы. */
+  anchorId: string
   startX: number
   startY: number
   orig: Map<string, { x: number; y: number }>
@@ -124,13 +128,17 @@ export class Desktop {
   private iconDrag: IconDrag | null = null
   private band: Band | null = null
   private lastClick = { id: '', at: 0 }
+  /** Второй щелчок по ярлыку: откроем на отпускании, если не начали тащить. */
+  private clickOpen: { app: string } | null = null
 
-  // установка «вируса» и доступ к камере
+  // загрузка файла из письма и доступ к камере
   private install: { start: number; end: number } | null = null
   private threatSent = false
   private cameraAccess = false
 
   private drag: { win: Win; ox: number; oy: number } | null = null
+  /** Протяжка внутри окна: выделение текста в блокноте. */
+  private appDrag: Win | null = null
   private grain: CanvasPattern | null = null
   private lastMinute = -1
   private pointer = { x: DESKTOP_W / 2, y: DESKTOP_H / 2, over: false }
@@ -187,8 +195,10 @@ export class Desktop {
       if (win.min) continue
       if (win.app.tick?.()) this.dirty = true
     }
-    // Дыхание слышно только пока окно камеры открыто: свернули или закрыли — тишина.
-    const cameraOpen = this.windows.some((w) => !w.min && w.app instanceof Camera)
+    // Дыхание слышно только пока в браузере открыта страница камеры.
+    const cameraOpen = this.windows.some(
+      (w) => !w.min && w.app instanceof Browser && w.app.viewingCamera,
+    )
     if (!cameraOpen) this.sound.setBreathing(null)
 
     const minute = new Date().getMinutes()
@@ -196,6 +206,24 @@ export class Desktop {
       this.lastMinute = minute
       this.dirty = true
     }
+  }
+
+  /** Клавиша активному окну: сейчас это нужно адресной строке браузера. */
+  key(e: KeyboardEvent): boolean {
+    const win = this.activeWin()
+    if (!win || !win.app.key) return false
+    const handled = win.app.key(e)
+    if (handled) this.dirty = true
+    return handled
+  }
+
+  /** Вставка из буфера — туда же, в активное поле. */
+  paste(text: string): boolean {
+    const win = this.activeWin()
+    if (!win || !win.app.paste) return false
+    const handled = win.app.paste(text)
+    if (handled) this.dirty = true
+    return handled
   }
 
   draw(): void {
@@ -253,15 +281,16 @@ export class Desktop {
   // ── окна ─────────────────────────────────────────────────────────
 
   private makeApp(key: string): App {
-    if (key === 'browser') return new Browser(this.sound)
-    if (key === 'mail') return this.getMail()
-    if (key === 'map') return new MapApp()
-    if (key === 'computer') return new Explorer(this.sound)
-    if (key === 'camera') {
-      const cam = new Camera(this.sound)
-      cam.setAccess(this.cameraAccess)
-      return cam
+    if (key === 'browser') {
+      const browser = new Browser(this.sound)
+      browser.setAccess(this.cameraAccess)
+      browser.onFirstCameraView = () => this.triggerThreat()
+      return browser
     }
+    if (key === 'mail') return this.getMail()
+    if (key === 'notepad') return new Notepad()
+    if (key === 'domains') return new Notepad('domains.txt', DOMAINS_TEXT)
+    if (key === 'computer') return new Explorer(this.sound)
     return new Note('Корзина', ['Корзина пуста.', '', 'Здесь ничего нет. Пока.'])
   }
 
@@ -279,11 +308,6 @@ export class Desktop {
     if (key === 'mail') {
       this.hasNewMail = false
       this.dirty = true
-    }
-    // Первый запуск файла из архива: на экране появляется камера и приходит письмо.
-    if (key === 'camera' && !this.threatSent) {
-      this.threatSent = true
-      this.deliverThreat()
     }
 
     const existing = this.windows.find((w) => w.key === key)
@@ -328,7 +352,6 @@ export class Desktop {
 
   private close(win: Win): void {
     this.windows = this.windows.filter((w) => w !== win)
-    if (win.key === 'camera') this.sound.setBreathing(null)
     this.dirty = true
     this.sound.close()
   }
@@ -517,39 +540,46 @@ export class Desktop {
     this.dirty = true
   }
 
-  // ── установка файла из письма ────────────────────────────────────
+  // ── файл из письма ───────────────────────────────────────────────
 
-  /** Архив скачан — «распаковываем» его с прогрессом, как настоящий вирус. */
+  /** Вложение скачано — «сохраняем» его с прогрессом, как настоящую загрузку. */
   private beginInstall(): void {
-    if (this.install || this.icons.some((i) => i.id === 'cam04')) return
+    if (this.install || this.icons.some((i) => i.id === 'domains')) return
     const now = performance.now()
-    this.install = { start: now, end: now + 2800 }
+    this.install = { start: now, end: now + 2200 }
     this.sound.busy()
     this.dirty = true
   }
 
+  private firstFreeCell(): { x: number; y: number } {
+    const { cols, rows } = this.gridMax()
+    const taken = new Set<string>()
+    for (const icon of this.icons) {
+      const c = this.nearestCell(icon.x + ICON_W / 2, icon.y + ICON_H / 2)
+      taken.add(this.cellKey(c.col, c.row))
+    }
+    for (let col = 0; col < cols; col++) {
+      for (let row = 0; row < rows; row++) {
+        if (!taken.has(this.cellKey(col, row))) {
+          return { x: 10 + col * 94, y: 8 + row * 94 }
+        }
+      }
+    }
+    return { x: 10, y: 8 }
+  }
+
+  /** На рабочий стол кладётся один файл — domains.txt с двумя адресами. */
   private dropPayload(): void {
-    if (!this.icons.some((i) => i.id === 'cam04')) {
-      this.icons.push({
-        id: 'cam04',
-        label: 'cam04.exe',
-        glyph: 'camera',
-        app: 'camera',
-        x: 104,
-        y: 8,
-      })
-    }
-    // карта наблюдения приезжает тем же архивом
-    if (!this.icons.some((i) => i.id === 'map')) {
-      this.icons.push({
-        id: 'map',
-        label: 'Карта',
-        glyph: 'map',
-        app: 'map',
-        x: 104,
-        y: 102,
-      })
-    }
+    if (this.icons.some((i) => i.id === 'domains')) return
+    const cell = this.firstFreeCell()
+    this.icons.push({
+      id: 'domains',
+      label: 'domains.txt',
+      glyph: 'file',
+      app: 'domains',
+      x: cell.x,
+      y: cell.y,
+    })
   }
 
   private drawInstall(): void {
@@ -567,11 +597,11 @@ export class Desktop {
     g.addColorStop(1, C.titleOn)
     ctx.fillStyle = g
     ctx.fillRect(bar.x, bar.y, bar.w, bar.h)
-    text(ctx, 'Установка', bar.x + 5, bar.y + 8.5, { size: 12, bold: true, color: C.titleText })
+    text(ctx, 'Загрузка файла', bar.x + 5, bar.y + 8.5, { size: 12, bold: true, color: C.titleText })
 
     const x = r.x + 18
     let y = r.y + 34
-    text(ctx, 'Распаковка cam04-archive.zip', x, y, { size: 12, bold: true })
+    text(ctx, 'Сохранение domains.txt', x, y, { size: 12, bold: true })
     y += 18
     text(ctx, 'Файл будет помещён на рабочий стол.', x, y, { size: 11, color: C.textDim })
 
@@ -681,7 +711,7 @@ export class Desktop {
     this.dirty = true
   }
 
-  /** Письмо от похитителей приходит в момент первого запуска cam04.exe. */
+  /** Письмо от похитителей приходит при первом открытии страницы камеры. */
   private deliverThreat(): void {
     this.getMail().deliverThreat()
     this.hasNewMail = true
@@ -690,11 +720,17 @@ export class Desktop {
     this.dirty = true
   }
 
+  private triggerThreat(): void {
+    if (this.threatSent) return
+    this.threatSent = true
+    this.deliverThreat()
+  }
+
   /** Игрок прочитал письмо — замок камеры разблокирован. */
   private grantCamera(): void {
     this.cameraAccess = true
-    const cam = this.cache.get('camera')
-    if (cam instanceof Camera) cam.setAccess(true)
+    const browser = this.cache.get('browser')
+    if (browser instanceof Browser) browser.setAccess(true)
     this.dirty = true
   }
 
@@ -714,7 +750,7 @@ export class Desktop {
     g.addColorStop(1, C.titleOn)
     ctx.fillStyle = g
     ctx.fillRect(bar.x, bar.y, bar.w, bar.h)
-    text(ctx, this.toast.kind === 'file' ? 'Установка' : 'Почта', bar.x + 5, bar.y + 8.5, {
+    text(ctx, this.toast.kind === 'file' ? 'Файл' : 'Почта', bar.x + 5, bar.y + 8.5, {
       size: 11,
       bold: true,
       color: C.titleText,
@@ -732,10 +768,10 @@ export class Desktop {
     ctx.stroke()
 
     if (this.toast.kind === 'file') {
-      drawIcon(ctx, 'camera', r.x + 28, r.y + 44, 1)
-      text(ctx, 'Установка завершена', r.x + 50, r.y + 32, { size: 12, bold: true })
-      text(ctx, 'На рабочем столе: cam04.exe и Карта', r.x + 50, r.y + 50, { size: 11, color: C.alert })
-      text(ctx, 'Запустите файл, чтобы открыть камеру', r.x + 50, r.y + 68, {
+      drawIcon(ctx, 'file', r.x + 28, r.y + 44, 1)
+      text(ctx, 'Файл сохранён', r.x + 50, r.y + 32, { size: 12, bold: true })
+      text(ctx, 'На рабочем столе: domains.txt', r.x + 50, r.y + 50, { size: 11, color: C.alert })
+      text(ctx, 'Откройте его в блокноте', r.x + 50, r.y + 68, {
         size: 10,
         color: C.textDim,
       })
@@ -755,7 +791,7 @@ export class Desktop {
     ctx.stroke()
 
     text(ctx, 'Входящие: новое сообщение', r.x + 50, r.y + 32, { size: 12, bold: true })
-    text(ctx, 'Вложение: cam04-archive.zip', r.x + 50, r.y + 50, { size: 11, color: C.alert })
+    text(ctx, 'Вложение: domains.txt', r.x + 50, r.y + 50, { size: 11, color: C.alert })
     text(ctx, 'Нажмите, чтобы открыть', r.x + 50, r.y + 68, { size: 10, color: C.textDim })
   }
 
@@ -827,6 +863,7 @@ export class Desktop {
     this.pointer.x = x
     this.pointer.y = y
     this.pointer.over = true
+    this.clickOpen = null
 
     // Модальное окно установки перекрывает рабочий стол целиком.
     if (this.install) return
@@ -950,6 +987,7 @@ export class Desktop {
         this.clearSelection()
         this.raise(win)
         win.app.click(x, y, cr)
+        if (win.app.drag) this.appDrag = win
         this.dirty = true
         return
       }
@@ -961,12 +999,13 @@ export class Desktop {
       if (!inside(this.iconRect(icon), x, y)) continue
 
       const now = performance.now()
-      if (this.lastClick.id === icon.id && now - this.lastClick.at < 450) {
+      if (!shift && this.lastClick.id === icon.id && now - this.lastClick.at < 450) {
+        // Не открываем сразу: если игрок начнёт тащить, это не двойной щелчок.
         this.lastClick = { id: '', at: 0 }
-        this.open(icon.app)
-        return
+        this.clickOpen = { app: icon.app }
+      } else {
+        this.lastClick = shift ? { id: '', at: 0 } : { id: icon.id, at: now }
       }
-      this.lastClick = { id: icon.id, at: now }
 
       if (shift) {
         if (this.selected.has(icon.id)) this.selected.delete(icon.id)
@@ -982,6 +1021,7 @@ export class Desktop {
       }
       this.iconDrag = {
         ids: [...this.selected],
+        anchorId: icon.id,
         startX: x,
         startY: y,
         orig,
@@ -1009,6 +1049,12 @@ export class Desktop {
     this.pointer.x = x
     this.pointer.y = y
     this.pointer.over = true
+
+    if (this.appDrag) {
+      this.appDrag.app.drag?.(x, y, this.contentRect(this.appDrag))
+      this.dirty = true
+      return
+    }
 
     if (this.band) {
       this.band.x1 = x
@@ -1059,14 +1105,22 @@ export class Desktop {
   }
 
   pointerUp(): void {
+    if (this.appDrag) {
+      this.appDrag.app.release?.()
+      this.appDrag = null
+      this.dirty = true
+    }
+    const openApp = this.clickOpen && !(this.iconDrag?.moved ?? false) ? this.clickOpen.app : null
     if (this.iconDrag?.moved) this.snapIcons(this.iconDrag.ids)
     this.drag = null
     this.iconDrag = null
+    this.clickOpen = null
     this.resizing = null
     if (this.band) {
       this.band = null
       this.dirty = true
     }
+    if (openApp) this.open(openApp)
   }
 
   // ── сетка ярлыков ────────────────────────────────────────────────
@@ -1082,8 +1136,8 @@ export class Desktop {
   private nearestCell(x: number, y: number): { col: number; row: number } {
     const { cols, rows } = this.gridMax()
     return {
-      col: clamp(Math.round((x - 10) / 94), 0, cols - 1),
-      row: clamp(Math.round((y - 8) / 94), 0, rows - 1),
+      col: clamp(Math.round((x - 10 - ICON_W / 2) / 94), 0, cols - 1),
+      row: clamp(Math.round((y - 8 - ICON_H / 2) / 94), 0, rows - 1),
     }
   }
 
@@ -1091,38 +1145,66 @@ export class Desktop {
     return `${col}:${row}`
   }
 
-  /** Ближайшая свободная ячейка к заданной: поиск по кольцам вокруг. */
-  private freeCellAround(col: number, row: number, taken: Set<string>): { col: number; row: number } {
+  /** Ближайшая свободная ячейка: поиск по кольцам, внутри кольца — по расстоянию. */
+  private nearestFreeCell(col: number, row: number, taken: Set<string>): { col: number; row: number } {
     const { cols, rows } = this.gridMax()
-    for (let ring = 1; ring < cols + rows; ring++) {
+    for (let ring = 0; ring < cols + rows; ring++) {
+      let best: { col: number; row: number; d: number } | null = null
       for (let dc = -ring; dc <= ring; dc++) {
         for (let dr = -ring; dr <= ring; dr++) {
           if (Math.max(Math.abs(dc), Math.abs(dr)) !== ring) continue
           const c = col + dc
           const r = row + dr
           if (c < 0 || r < 0 || c >= cols || r >= rows) continue
-          if (!taken.has(this.cellKey(c, r))) return { col: c, row: r }
+          if (taken.has(this.cellKey(c, r))) continue
+          const d = dc * dc + dr * dr
+          if (!best || d < best.d) best = { col: c, row: r, d }
         }
       }
+      if (best) return { col: best.col, row: best.row }
     }
-    return { col, row }
+    return { col: clamp(col, 0, cols - 1), row: clamp(row, 0, rows - 1) }
   }
 
   /** Прижать перетащенные ярлыки к сетке; в занятую ячейку не ставить. */
   private snapIcons(ids: string[]): void {
+    const { cols, rows } = this.gridMax()
+    const dragged = this.icons.filter((i) => ids.includes(i.id))
+    if (dragged.length === 0) return
+
+    // Все неперетаскиваемые ярлыки занимают свои ячейки.
     const taken = new Set<string>()
     for (const icon of this.icons) {
       if (ids.includes(icon.id)) continue
       const c = this.nearestCell(icon.x + ICON_W / 2, icon.y + ICON_H / 2)
       taken.add(this.cellKey(c.col, c.row))
     }
-    const dragged = this.icons
-      .filter((i) => ids.includes(i.id))
-      .sort((a, b) => a.x - b.x || a.y - b.y)
-    for (const icon of dragged) {
-      const want = this.nearestCell(icon.x + ICON_W / 2, icon.y + ICON_H / 2)
+
+    // Сдвиг группы считаем по ярлыку, за который взялись мышью: так
+    // взаимное расположение нескольких выделенных ярлыков не разъезжается.
+    const drag = this.iconDrag
+    const anchor = dragged.find((i) => i.id === drag?.anchorId) ?? dragged[0]
+    const anchorOrig = drag?.orig.get(anchor.id) ?? { x: anchor.x, y: anchor.y }
+    const anchorFrom = this.nearestCell(anchorOrig.x + ICON_W / 2, anchorOrig.y + ICON_H / 2)
+    const anchorTo = this.nearestCell(anchor.x + ICON_W / 2, anchor.y + ICON_H / 2)
+    const dCol = anchorTo.col - anchorFrom.col
+    const dRow = anchorTo.row - anchorFrom.row
+
+    const sorted = [...dragged].sort((a, b) => {
+      const ca = this.nearestCell(a.x + ICON_W / 2, a.y + ICON_H / 2)
+      const cb = this.nearestCell(b.x + ICON_W / 2, b.y + ICON_H / 2)
+      return ca.row - cb.row || ca.col - cb.col
+    })
+
+    for (const icon of sorted) {
+      const orig = drag?.orig.get(icon.id) ?? { x: icon.x, y: icon.y }
+      const from = this.nearestCell(orig.x + ICON_W / 2, orig.y + ICON_H / 2)
+      const want = {
+        col: clamp(from.col + dCol, 0, cols - 1),
+        row: clamp(from.row + dRow, 0, rows - 1),
+      }
       const free = taken.has(this.cellKey(want.col, want.row))
-        ? this.freeCellAround(want.col, want.row, taken)
+        ? this.nearestFreeCell(want.col, want.row, taken)
         : want
       taken.add(this.cellKey(free.col, free.row))
       icon.x = 10 + free.col * 94

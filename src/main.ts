@@ -21,6 +21,17 @@ const host: HTMLDivElement = found
 const sound = new Sound()
 const desktop = new Desktop(sound)
 
+// Клавиатура нужна только адресной строке и поиску браузера: остальное — мышью.
+window.addEventListener('keydown', (e) => {
+  const target = e.target as HTMLElement | null
+  if (target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)) return
+  if (desktop.key(e)) e.preventDefault()
+})
+window.addEventListener('paste', (e) => {
+  const text = e.clipboardData?.getData('text')
+  if (text && desktop.paste(text)) e.preventDefault()
+})
+
 // Отладочный режим: посмотреть рабочий стол без 3D → ?ui
 if (location.search.includes('ui')) {
   desktop.canvas.style.width = '960px'

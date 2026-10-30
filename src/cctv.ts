@@ -123,12 +123,12 @@ export class Cctv {
     this.renderer.setSize(W, H, false)
     this.renderer.setClearColor(0x05070a, 1)
 
-    this.scene.fog = new THREE.Fog(0x05070a, 3.5, 9)
+    this.scene.fog = new THREE.Fog(0x05070a, 4, 11)
 
     this.applyCam()
 
-    this.scene.add(new THREE.AmbientLight(0x3a4048, 1.4))
-    this.lamp = new THREE.PointLight(0xffd9a0, 14, 9, 2)
+    this.scene.add(new THREE.AmbientLight(0x4a5058, 2.2))
+    this.lamp = new THREE.PointLight(0xffd9a0, 18, 10, 2)
     this.lamp.position.set(0.2, 2.9, -0.4)
     this.scene.add(this.lamp)
 
@@ -350,7 +350,7 @@ export class Cctv {
 
     // лампа слегка дрожит, как настоящая люминесцентная
     const flick = 1 + Math.sin(this.time * 37) * 0.04 + Math.sin(this.time * 11) * 0.03
-    this.lamp.intensity = 14 * flick
+    this.lamp.intensity = 18 * flick
 
     if (this.doorOpen > 0 && this.doorOpen < 1) {
       this.doorOpen = Math.min(1, this.doorOpen + dt * 1.6)
@@ -434,17 +434,17 @@ export class Cctv {
     g.position.y = SIT_Y * sit
 
     if (this.state === 'tied') {
-      // привязана: дышит всё быстрее со стрессом, ёрзает, озирается
+      // привязана: дышит всё быстрее со стрессом, вырывается, озирается
       const w = t * 6.5
       const stress = this.stress
       const breath = Math.sin(t * (1.6 + stress * 1.6))
       this.applyPose(SIT)
-      this.pose('Spine', 0.04 + breath * (0.015 + stress * 0.03), Math.sin(t * 1.7) * 0.1, Math.cos(w * 0.5) * 0.05)
-      this.pose('Head', breath * 0.04, Math.sin(t * 0.7) * 0.55, Math.sin(w * 0.5) * 0.08)
-      this.pose('LeftUpLeg', 0, 0, 1.5 + Math.max(0, Math.sin(w)) * 0.2)
-      this.pose('RightUpLeg', 0, 0, 1.5 + Math.max(0, Math.sin(w + 2.1)) * 0.2)
-      this.pose('LeftArm', 0.95 + Math.sin(w * 1.3) * 0.1, 0, 0.55)
-      this.pose('RightArm', 0.95 - Math.sin(w * 1.1) * 0.1, 0, -0.55)
+      this.pose('Spine', 0.04 + breath * (0.015 + stress * 0.03), Math.sin(t * 1.7) * 0.18, Math.cos(w * 0.5) * 0.08)
+      this.pose('Head', breath * 0.04, Math.sin(t * 0.7) * 0.65, Math.sin(w * 0.5) * 0.12)
+      this.pose('LeftUpLeg', 0, 0, 1.5 + Math.max(0, Math.sin(w)) * 0.32)
+      this.pose('RightUpLeg', 0, 0, 1.5 + Math.max(0, Math.sin(w + 2.1)) * 0.32)
+      this.pose('LeftArm', 0.95 + Math.sin(w * 1.3) * 0.28, 0, 0.55 + Math.sin(w * 0.9) * 0.12)
+      this.pose('RightArm', 0.95 - Math.sin(w * 1.1) * 0.28, 0, -0.55 - Math.sin(w * 0.8) * 0.12)
       this.targetX = CHAIR.x
       this.targetZ = CHAIR.z
       this.yaw = this.yawTarget = CHAIR_YAW // ровно по спинке стула

@@ -181,7 +181,7 @@ export class Camera implements App {
     ctx.clip()
 
     ctx.globalCompositeOperation = 'multiply'
-    ctx.fillStyle = 'rgba(150, 210, 170, 0.9)'
+    ctx.fillStyle = 'rgba(160, 215, 175, 0.75)'
     ctx.fillRect(f.x, f.y, f.w, f.h)
     ctx.globalCompositeOperation = 'source-over'
 

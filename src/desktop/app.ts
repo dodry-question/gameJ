@@ -8,4 +8,12 @@ export interface App {
   click(x: number, y: number, r: Rect): void
   /** Кадр анимации. true — содержимое изменилось и окно надо перерисовать. */
   tick?(): boolean
+  /** Клавиша активному окну. true — событие обработано. */
+  key?(e: KeyboardEvent): boolean
+  /** Вставка из буфера обмена. true — обработано. */
+  paste?(text: string): boolean
+  /** Протяжка мышью внутри содержимого окна (выделение текста в блокноте). */
+  drag?(x: number, y: number, r: Rect): void
+  /** Кнопка мыши отпущена — завершить протяжку. */
+  release?(): void
 }

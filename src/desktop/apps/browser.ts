@@ -10,19 +10,45 @@ import { C, bevel, fill, inside, panel, setFont, text, wrap } from '../draw'
 import type { Rect } from '../draw'
 import type { App } from '../app'
 import type { Sound } from '../../audio'
+import { Camera } from './camera'
+import { MapApp } from './map'
+import { CAM_URL, MAP_URL } from '../domains'
 
-type Page = 'home' | 'search' | 'cams' | 'error'
+type Page =
+  | 'home'
+  | 'search'
+  | 'cams'
+  | 'cam'
+  | 'map'
+  | 'journal'
+  | 'files'
+  | 'gate'
+  | 'mail'
+  | 'help'
+  | 'error'
+  | 'external'
+  | 'notfound'
+
+/** Активное поле ввода: адресная строка или поиск. */
+type Focus = 'address' | 'search'
 
 type Hit = { r: Rect; fn: () => void }
 
 const SERIF = '"Times New Roman", Times, Georgia, serif'
 
-const URLS: Record<Page, string> = {
+const URLS = {
   home: 'http://intranet.local/',
   search: 'http://intranet.local/cgi-bin/search?q=kamery',
   cams: 'http://intranet.local/security/cams/',
+  cam: CAM_URL,
+  map: MAP_URL,
+  journal: 'http://intranet.local/journal/',
+  files: 'http://intranet.local/files/blok-c/',
+  gate: 'http://intranet.local/gate/',
+  mail: 'http://intranet.local/mail/',
+  help: 'http://intranet.local/help/',
   error: 'http://192.168.0.13/gate/',
-}
+} as const
 
 const HOME_TEXT =
   'Узел обслуживает службу охраны комплекса. Архив записей, схемы помещений ' +
@@ -58,16 +84,47 @@ const MENU = ['Файл', 'Правка', 'Вид', 'Переход', 'Связ�
 
 export class Browser implements App {
   title = 'Netscape Navigator'
+  /** Первый показ страницы камеры: сценарий присылает письмо похитителей. */
+  onFirstCameraView?: () => void
   private page: Page = 'home'
+  private url: string = URLS.home
+  private history: string[] = [URLS.home]
+  private hIndex = 0
   private hits: Hit[] = []
+  /** Прямоугольники полей ввода — нужны, чтобы клик по ним ставил фокус. */
+  private fields: Array<{ r: Rect; kind: Focus }> = []
+  private focus: Focus | null = null
+  private editValue = ''
+  private caret = 0
+  private selectAll = false
+  private loading = 0
+  private t = 0
+  private status = 'готово'
   private sound: Sound
+  private pageRect: Rect | null = null
+  private camView: Camera | null = null
+  private mapView: MapApp | null = null
+  private access = false
+  private camVisited = false
 
   constructor(sound: Sound) {
     this.sound = sound
   }
 
+  /** Доступ к замку камеры: открывается после прочтения письма. */
+  setAccess(allowed: boolean): void {
+    this.access = allowed
+    this.camView?.setAccess(allowed)
+  }
+
+  /** На странице камеры сейчас виден прямой эфир — по нему включается дыхание. */
+  get viewingCamera(): boolean {
+    return this.page === 'cam'
+  }
+
   draw(ctx: CanvasRenderingContext2D, r: Rect): void {
     this.hits = []
+    this.fields = []
     fill(ctx, r, C.face)
 
     let y = r.y
@@ -81,15 +138,52 @@ export class Browser implements App {
     y += CHROME.personal
 
     const page: Rect = { x: r.x, y, w: r.w, h: r.y + r.h - CHROME.status - y }
+    this.pageRect = page
     fill(ctx, page, '#ffffff')
     ctx.save()
     ctx.beginPath()
     ctx.rect(page.x, page.y, page.w, page.h)
     ctx.clip()
-    if (this.page === 'home') this.drawHome(ctx, page)
-    if (this.page === 'cams') this.drawCams(ctx, page)
-    else if (this.page === 'search') this.drawSearch(ctx, page)
-    else this.drawError(ctx, page)
+    switch (this.page) {
+      case 'home':
+        this.drawHome(ctx, page)
+        break
+      case 'search':
+        this.drawSearch(ctx, page)
+        break
+      case 'cams':
+        this.drawCams(ctx, page)
+        break
+      case 'cam':
+        this.drawCam(ctx, page)
+        break
+      case 'map':
+        this.drawMap(ctx, page)
+        break
+      case 'journal':
+        this.drawJournal(ctx, page)
+        break
+      case 'files':
+        this.drawFiles(ctx, page)
+        break
+      case 'gate':
+        this.drawGate(ctx, page)
+        break
+      case 'mail':
+        this.drawMail(ctx, page)
+        break
+      case 'help':
+        this.drawHelp(ctx, page)
+        break
+      case 'external':
+        this.drawExternal(ctx, page)
+        break
+      case 'notfound':
+        this.drawNotFound(ctx, page)
+        break
+      default:
+        this.drawError(ctx, page)
+    }
     ctx.restore()
 
     this.statusBar(ctx, {
@@ -100,9 +194,255 @@ export class Browser implements App {
     })
   }
 
-  private go(page: Page): void {
-    this.page = page
+  /** Анимация загрузки, камеры и карты. */
+  tick(): boolean {
+    let changed = false
+    if (this.loading > 0) {
+      this.t += 0.016
+      this.loading = Math.max(0, this.loading - 0.016)
+      changed = true
+    }
+    if (this.page === 'cam' && this.camView?.tick?.()) changed = true
+    if (this.page === 'map' && this.mapView?.tick?.()) changed = true
+    return changed
+  }
+
+  // ── навигация ────────────────────────────────────────────────────
+
+  /** Перейти по адресу и положить его в историю. */
+  private navigate(raw: string): void {
+    const url = this.normalize(raw)
+    this.history = this.history.slice(0, this.hIndex + 1)
+    this.history.push(url)
+    this.hIndex = this.history.length - 1
+    this.load(url)
+  }
+
+  /** Загрузить адрес без изменения истории — назад/вперёд/обновить. */
+  private load(raw: string): void {
+    this.url = this.normalize(raw)
+    this.page = this.route(this.url)
+    this.loading = 0.5
+    this.t = 0
+    this.status = this.statusFor(this.page)
+    this.focus = null
+    this.selectAll = false
+    this.sound.busy()
+    if (this.page === 'cam' && !this.camVisited) {
+      this.camVisited = true
+      this.onFirstCameraView?.()
+    }
+  }
+
+  private statusFor(page: Page): string {
+    if (page === 'error') return 'ошибка загрузки'
+    if (page === 'notfound') return 'документ не найден'
+    if (page === 'external') return 'внешняя сеть'
+    return 'готово'
+  }
+
+  /** Дописать схему, если её не ввели; короткий путь — от корня узла. */
+  private normalize(raw: string): string {
+    let s = raw.trim()
+    if (!s) return this.url
+    if (!/^[a-z][a-z0-9+.-]*:/i.test(s)) {
+      if (s.startsWith('/')) s = 'http://intranet.local' + s
+      else if (s.includes('.') || s.includes(':')) s = 'http://' + s
+      else s = `http://intranet.local/${s.replace(/^\/+/, '')}`
+    }
+    return s
+  }
+
+  private route(url: string): Page {
+    const low = url.toLowerCase()
+    if (low === 'about:help') return 'help'
+    if (low.startsWith('http://intranet.local') || low.startsWith('https://intranet.local')) {
+      const path = low.replace(/^https?:\/\/intranet\.local/, '').split(/[?#]/)[0]
+      if (path === '' || path === '/') return 'home'
+      if (path.startsWith('/security/cams')) return 'cams'
+      if (path.startsWith('/cgi-bin/search')) return 'search'
+      if (path.startsWith('/journal')) return 'journal'
+      if (path.startsWith('/files')) return 'files'
+      if (path.startsWith('/gate')) return 'gate'
+      if (path.startsWith('/mail')) return 'mail'
+      if (path.startsWith('/help')) return 'help'
+      return 'notfound'
+    }
+    if (low.startsWith('http://map.local') || low.startsWith('https://map.local')) {
+      const path = low.replace(/^https?:\/\/map\.local/, '').split(/[?#]/)[0]
+      return path === '' || path === '/' || path.startsWith('/map') ? 'map' : 'notfound'
+    }
+    if (low.startsWith('http://192.168.0.13') || low.startsWith('https://192.168.0.13')) {
+      const path = low.replace(/^https?:\/\/192\.168\.0\.13/, '').split(/[?#]/)[0]
+      if (path.startsWith('/cam')) return 'cam'
+      if (path.startsWith('/map')) return 'map'
+      return 'error'
+    }
+    if (/^https?:\/\//.test(low)) return 'external'
+    return 'notfound'
+  }
+
+  private go(page: keyof typeof URLS): void {
+    this.navigate(URLS[page])
+  }
+
+  private back(): void {
+    if (this.hIndex <= 0) {
+      this.sound.error()
+      return
+    }
+    this.hIndex--
+    this.load(this.history[this.hIndex])
     this.sound.click()
+  }
+
+  private forward(): void {
+    if (this.hIndex >= this.history.length - 1) {
+      this.sound.error()
+      return
+    }
+    this.hIndex++
+    this.load(this.history[this.hIndex])
+    this.sound.click()
+  }
+
+  private reload(): void {
+    if (this.loading > 0) return
+    this.load(this.url)
+    this.sound.click()
+  }
+
+  private stop(): void {
+    if (this.loading <= 0) return
+    this.loading = 0
+    this.status = 'остановлено'
+    this.sound.click()
+  }
+
+  /** Текущий поисковый запрос из адреса страницы. */
+  private get query(): string {
+    const m = this.url.match(/[?&]q=([^&#]*)/)
+    if (!m) return 'камеры'
+    try {
+      return decodeURIComponent(m[1].replace(/\+/g, ' '))
+    } catch {
+      return m[1]
+    }
+  }
+
+  // ── ввод ─────────────────────────────────────────────────────────
+
+  private focusField(kind: Focus): void {
+    this.focus = kind
+    this.editValue = kind === 'address' ? this.url : this.query
+    this.caret = this.editValue.length
+    this.selectAll = true
+    this.sound.click()
+  }
+
+  private submit(): void {
+    if (this.focus === 'search') {
+      this.navigate('http://intranet.local/cgi-bin/search?q=' + encodeURIComponent(this.editValue))
+      return
+    }
+    if (this.focus === 'address') this.navigate(this.editValue)
+  }
+
+  key(e: KeyboardEvent): boolean {
+    if (!this.focus) return false
+    const value = this.editValue
+
+    if (e.key === 'Enter') {
+      this.submit()
+      return true
+    }
+    if (e.key === 'Escape') {
+      this.focus = null
+      this.selectAll = false
+      return true
+    }
+    if (e.key === 'Backspace') {
+      if (this.selectAll) {
+        this.editValue = ''
+        this.caret = 0
+        this.selectAll = false
+      } else if (this.caret > 0) {
+        this.editValue = value.slice(0, this.caret - 1) + value.slice(this.caret)
+        this.caret--
+      }
+      return true
+    }
+    if (e.key === 'Delete') {
+      if (this.selectAll) {
+        this.editValue = ''
+        this.caret = 0
+        this.selectAll = false
+      } else if (this.caret < value.length) {
+        this.editValue = value.slice(0, this.caret) + value.slice(this.caret + 1)
+      }
+      return true
+    }
+    if (e.key === 'ArrowLeft') {
+      this.selectAll = false
+      this.caret = Math.max(0, this.caret - 1)
+      return true
+    }
+    if (e.key === 'ArrowRight') {
+      this.selectAll = false
+      this.caret = Math.min(this.editValue.length, this.caret + 1)
+      return true
+    }
+    if (e.key === 'Home') {
+      this.selectAll = false
+      this.caret = 0
+      return true
+    }
+    if (e.key === 'End') {
+      this.selectAll = false
+      this.caret = this.editValue.length
+      return true
+    }
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
+      this.selectAll = true
+      return true
+    }
+    if (e.ctrlKey || e.metaKey || e.altKey) return false
+    if (e.key.length !== 1) return false
+
+    if (this.selectAll) {
+      this.editValue = ''
+      this.caret = 0
+      this.selectAll = false
+    }
+    this.editValue =
+      this.editValue.slice(0, this.caret) + e.key + this.editValue.slice(this.caret)
+    this.caret += e.key.length
+    return true
+  }
+
+  paste(text: string): boolean {
+    if (!this.focus) return false
+    const clean = text.replace(/[\r\n]+/g, ' ').trim()
+    if (!clean) return false
+    if (this.selectAll) {
+      this.editValue = ''
+      this.caret = 0
+      this.selectAll = false
+    }
+    this.editValue =
+      this.editValue.slice(0, this.caret) + clean + this.editValue.slice(this.caret)
+    this.caret += clean.length
+    return true
+  }
+
+  /** Отдать внешнюю ссылку системному браузеру: внутри игры её не показать. */
+  private openExternal(): void {
+    const a = document.createElement('a')
+    a.href = this.url
+    a.target = '_blank'
+    a.rel = 'noopener noreferrer'
+    a.click()
+    this.status = 'ссылка передана в системный браузер'
   }
 
   // ── хром окна ────────────────────────────────────────────────────
@@ -135,14 +475,14 @@ export class Browser implements App {
     const right = r.x + r.w - throbber - 6
 
     const tools: Array<[string, string, () => void]> = [
-      ['back', 'Назад', () => this.sound.click()],
-      ['forward', 'Вперёд', () => this.sound.click()],
+      ['back', 'Назад', () => this.back()],
+      ['forward', 'Вперёд', () => this.forward()],
       ['home', 'Домой', () => this.go('home')],
-      ['reload', 'Обновить', () => this.go(this.page)],
+      ['reload', 'Обновить', () => this.reload()],
       ['images', 'Графика', () => this.sound.click()],
       ['print', 'Печать', () => this.sound.error()],
       ['search', 'Поиск', () => this.go('search')],
-      ['stop', 'Стоп', () => this.sound.error()],
+      ['stop', 'Стоп', () => this.stop()],
     ]
 
     let x = r.x + 4
@@ -266,14 +606,19 @@ export class Browser implements App {
     ctx.lineWidth = 1
     ctx.stroke()
 
+    const a = this.loading > 0 ? this.t * 7 : 0
+    ctx.save()
+    ctx.translate(cx, cy)
+    ctx.rotate(a)
     ctx.strokeStyle = '#d8b24a'
     ctx.beginPath()
-    ctx.ellipse(cx, cy, 16, 6, 0, 0, Math.PI * 2)
+    ctx.ellipse(0, 0, 16, 6, 0, 0, Math.PI * 2)
     ctx.stroke()
     ctx.fillStyle = '#f0d27a'
     ctx.beginPath()
-    ctx.arc(cx + 15, cy - 2, 2, 0, Math.PI * 2)
+    ctx.arc(15, 0, 2, 0, Math.PI * 2)
     ctx.fill()
+    ctx.restore()
 
     ctx.fillStyle = '#eef3ff'
     ctx.font = `bold 18px ${SERIF}`
@@ -291,9 +636,26 @@ export class Browser implements App {
     const drop: Rect = { x: r.x + r.w - 22, y: r.y + 3, w: 18, h: r.h - 7 }
     const field: Rect = { x: r.x + 48, y: r.y + 3, w: drop.x - r.x - 54, h: r.h - 7 }
     fill(ctx, field, '#ffffff')
-    ctx.strokeStyle = C.lo
+    ctx.strokeStyle = this.focus === 'address' ? '#2c4f86' : C.lo
     ctx.strokeRect(field.x + 0.5, field.y + 0.5, field.w - 1, field.h - 1)
-    text(ctx, URLS[this.page], field.x + 4, field.y + field.h / 2, { size: 11, color: C.ink })
+
+    const value = this.focus === 'address' ? this.editValue : this.url
+    setFont(ctx, 11)
+    ctx.save()
+    ctx.beginPath()
+    ctx.rect(field.x + 2, field.y + 1, field.w - 4, field.h - 2)
+    ctx.clip()
+    ctx.fillStyle = C.ink
+    ctx.textAlign = 'left'
+    ctx.textBaseline = 'middle'
+    ctx.fillText(value, field.x + 4, field.y + field.h / 2)
+    if (this.focus === 'address') {
+      const caretX = field.x + 4 + ctx.measureText(value.slice(0, this.caret)).width
+      ctx.fillStyle = '#111111'
+      ctx.fillRect(caretX, field.y + 4, 1, field.h - 8)
+    }
+    ctx.restore()
+    this.fields.push({ r: field, kind: 'address' })
 
     panel(ctx, drop, true, 1)
     ctx.fillStyle = C.text
@@ -303,7 +665,12 @@ export class Browser implements App {
     ctx.lineTo(drop.x + 9, drop.y + 12)
     ctx.closePath()
     ctx.fill()
-    this.hits.push({ r: drop, fn: () => this.sound.click() })
+    this.hits.push({
+      r: drop,
+      fn: () => {
+        this.focusField('address')
+      },
+    })
   }
 
   private personalBar(ctx: CanvasRenderingContext2D, r: Rect): void {
@@ -313,8 +680,8 @@ export class Browser implements App {
     const links: Array<[string, () => void]> = [
       ['Начало', () => this.go('home')],
       ['Поиск', () => this.go('search')],
-      ['Почта', () => this.sound.error()],
-      ['Справка', () => this.go('error')],
+      ['Почта', () => this.go('mail')],
+      ['Справка', () => this.go('help')],
     ]
     let x = r.x + 62
     for (const [label, fn] of links) {
@@ -344,7 +711,8 @@ export class Browser implements App {
     fill(ctx, r, C.face)
     bevel(ctx, r, false, 1)
 
-    const left = this.page === 'error' ? 'Документ: ошибка загрузки' : 'Документ: готово'
+    const left =
+      this.loading > 0 ? 'Документ: загрузка…' : `Документ: ${this.status}`
     text(ctx, left, r.x + 8, r.y + r.h / 2, { size: 10, color: C.textDim })
 
     // «замок» защищённого соединения — как в Netscape
@@ -359,10 +727,11 @@ export class Browser implements App {
     ctx.stroke()
 
     // индикатор прогресса загрузки: три сегмента
+    const filled = this.loading > 0 ? 1 + Math.floor((1 - this.loading / 0.5) * 2.99) : 1
     for (let i = 0; i < 3; i++) {
       const seg: Rect = { x: r.x + r.w - 162 + i * 18, y: r.y + 6, w: 15, h: r.h - 12 }
       panel(ctx, seg, false, 1)
-      if (i === 0) fill(ctx, { x: seg.x + 2, y: seg.y + 2, w: seg.w - 4, h: seg.h - 4 }, '#3f7a3f')
+      if (i < filled) fill(ctx, { x: seg.x + 2, y: seg.y + 2, w: seg.w - 4, h: seg.h - 4 }, '#3f7a3f')
     }
 
     text(ctx, '33.6 Кбит/с', r.x + r.w - 100, r.y + r.h / 2, { size: 10, color: C.textDim })
@@ -446,7 +815,7 @@ export class Browser implements App {
       this.serif(ctx, 12)
       ctx.fillStyle = '#5c5c54'
       ctx.fillText(date, x, y)
-      this.link(ctx, label, x + 78, y, () => this.go('error'), 12)
+      this.link(ctx, label, x + 78, y, () => this.go('journal'), 12)
       y += 17
     }
 
@@ -458,9 +827,9 @@ export class Browser implements App {
     y += 19
     this.link(ctx, '› Сеть наблюдения блока C', x, y, () => this.go('cams'))
     y += 19
-    this.link(ctx, '› Список файлов блока C', x, y, () => this.go('error'))
+    this.link(ctx, '› Список файлов блока C', x, y, () => this.go('files'))
     y += 19
-    this.link(ctx, '› Почтовый шлюз (только изнутри)', x, y, () => this.sound.error())
+    this.link(ctx, '› Почтовый шлюз (только изнутри)', x, y, () => this.go('mail'))
 
     // счётчик посещений
     const footY = p.y + p.h - 44
@@ -512,9 +881,25 @@ export class Browser implements App {
     ctx.fillText('Искать:', x, y)
     const q: Rect = { x: x + 52, y: y - 10, w: p.w - 210, h: 22 }
     fill(ctx, q, '#ffffff')
-    ctx.strokeStyle = C.lo
+    ctx.strokeStyle = this.focus === 'search' ? '#2c4f86' : C.lo
     ctx.strokeRect(q.x + 0.5, q.y + 0.5, q.w - 1, q.h - 1)
-    text(ctx, 'камеры', q.x + 5, q.y + 11, { size: 12, color: C.ink })
+    const value = this.focus === 'search' ? this.editValue : this.query
+    setFont(ctx, 12)
+    ctx.save()
+    ctx.beginPath()
+    ctx.rect(q.x + 2, q.y + 1, q.w - 4, q.h - 2)
+    ctx.clip()
+    ctx.fillStyle = C.ink
+    ctx.textAlign = 'left'
+    ctx.textBaseline = 'middle'
+    ctx.fillText(value, q.x + 5, q.y + 11)
+    if (this.focus === 'search') {
+      const caretX = q.x + 5 + ctx.measureText(value.slice(0, this.caret)).width
+      ctx.fillStyle = '#111111'
+      ctx.fillRect(caretX, q.y + 4, 1, q.h - 8)
+    }
+    ctx.restore()
+    this.fields.push({ r: q, kind: 'search' })
 
     const find: Rect = { x: q.x + q.w + 8, y: q.y, w: 62, h: 22 }
     panel(ctx, find, true, 1)
@@ -526,7 +911,8 @@ export class Browser implements App {
     this.hits.push({
       r: find,
       fn: () => {
-        this.sound.click()
+        if (this.focus === 'search') this.submit()
+        else this.navigate('http://intranet.local/cgi-bin/search?q=' + encodeURIComponent(this.query))
       },
     })
 
@@ -537,7 +923,7 @@ export class Browser implements App {
     y += 20
 
     RESULTS.forEach(([title, url], i) => {
-      this.link(ctx, title, x, y, () => this.go('error'), 14)
+      this.link(ctx, title, x, y, () => this.navigate('http://' + url), 14)
       y += 17
       this.serif(ctx, 11)
       ctx.fillStyle = '#2f6b2f'
@@ -576,9 +962,7 @@ export class Browser implements App {
       ['КАМ-04', 'комната 4 · общий вид', 'ОНЛАЙН'],
     ]
     for (const [name, place, status] of cams) {
-      this.serif(ctx, 12, true)
-      ctx.fillStyle = '#23231c'
-      ctx.fillText(name, x, y)
+      this.link(ctx, name, x, y, () => this.navigate(CAM_URL), 12)
       this.serif(ctx, 12)
       ctx.fillStyle = '#5c5c54'
       ctx.fillText(place, x + 64, y)
@@ -595,9 +979,9 @@ export class Browser implements App {
     ctx.fillStyle = '#23231c'
     for (const line of [
       'В блоке C одна камера — КАМ-04, комната 4.',
-      'Картомониторинг: приложение «Карта» на столе оператора.',
-      'Управление замками: одна команда за раз, с подтверждением по почте.',
-      'Напоминаем: наблюдение не означает вмешательство.',
+      'Карта комплекса: http://map.local/map — открывается в Netscape.',
+      'Щёлкните по камере на карте — её адрес скопируется в буфер обмена.',
+      'Вставьте адрес в строку браузера, чтобы увидеть картинку.',
     ]) {
       for (const part of wrap(ctx, line, p.w - 60, 12)) {
         ctx.fillText(part, x, y)
@@ -608,6 +992,25 @@ export class Browser implements App {
 
     y += 8
     this.link(ctx, '← На главную', x, y, () => this.go('home'))
+  }
+
+  private drawCam(ctx: CanvasRenderingContext2D, p: Rect): void {
+    if (!this.camView) {
+      this.camView = new Camera(this.sound)
+      this.camView.setAccess(this.access)
+    }
+    this.camView.draw(ctx, p)
+  }
+
+  private drawMap(ctx: CanvasRenderingContext2D, p: Rect): void {
+    if (!this.mapView) {
+      this.mapView = new MapApp()
+      this.mapView.onCopy = () => {
+        this.status = 'ссылка скопирована в буфер обмена'
+        this.sound.click()
+      }
+    }
+    this.mapView.draw(ctx, p)
   }
 
   private drawError(ctx: CanvasRenderingContext2D, p: Rect): void {
@@ -658,20 +1061,310 @@ export class Browser implements App {
     this.serif(ctx, 12, false, 'center')
     ctx.fillStyle = C.text
     ctx.fillText('Повторить', cx, retry.y + retry.h / 2)
-    this.hits.push({ r: retry, fn: () => this.go('home') })
+    this.hits.push({ r: retry, fn: () => this.reload() })
 
     y += 34
     this.serif(ctx, 11, false, 'center')
     ctx.fillStyle = '#5c5c54'
-    ctx.fillText(URLS.error, cx, y)
+    ctx.fillText(this.url, cx, y)
+  }
+
+  private drawJournal(ctx: CanvasRenderingContext2D, p: Rect): void {
+    const x = p.x + 20
+    let y = p.y + 26
+
+    this.serif(ctx, 16, true)
+    ctx.fillStyle = '#23231c'
+    ctx.fillText('ЖУРНАЛ СОБЫТИЙ', x, y)
+    y += 18
+    this.serif(ctx, 11)
+    ctx.fillStyle = '#5c5c54'
+    ctx.fillText('узел INTRANET-LOCAL · блок C · ноябрь 2000', x, y)
+    y += 16
+    this.rule(ctx, x, y, p.w - 40)
+    y += 20
+
+    const rows: Array<[string, string]> = [
+      ['12.11.2000 03:06', 'КАМ-04: движение в комнате 4, объект на стуле'],
+      ['12.11.2000 03:07', 'Письмо без темы от неизвестного отправителя'],
+      ['11.11.2000 22:40', 'Комната 4: замок закрыт изнутри, ключ не использован'],
+      ['09.11.2000 08:15', 'Плановые работы: вентиляция блока C'],
+      ['31.10.2000 19:00', 'Смена охраны принята без замечаний'],
+    ]
+    for (const [date, label] of rows) {
+      this.serif(ctx, 11)
+      ctx.fillStyle = '#5c5c54'
+      ctx.fillText(date, x, y)
+      this.serif(ctx, 12)
+      ctx.fillStyle = '#23231c'
+      for (const line of wrap(ctx, label, p.w - 140, 12)) {
+        ctx.fillText(line, x + 104, y)
+        y += 15
+      }
+      y += 5
+    }
+
+    y += 8
+    this.rule(ctx, x, y, p.w - 40)
+    y += 18
+    this.link(ctx, '← На главную', x, y, () => this.go('home'))
+  }
+
+  private drawFiles(ctx: CanvasRenderingContext2D, p: Rect): void {
+    const x = p.x + 20
+    let y = p.y + 26
+
+    this.serif(ctx, 16, true)
+    ctx.fillStyle = '#23231c'
+    ctx.fillText('ФАЙЛЫ · БЛОК C', x, y)
+    y += 18
+    this.serif(ctx, 11)
+    ctx.fillStyle = '#5c5c54'
+    ctx.fillText('каталог /files/blok-c/ · только служебный доступ', x, y)
+    y += 16
+    this.rule(ctx, x, y, p.w - 40)
+    y += 22
+
+    const files: Array<[string, string]> = [
+      ['plan-bloka-c.gif', '84 КБ · схема помещений'],
+      ['vent-blok-c.dwg', '340 КБ · вентиляция, лист 3'],
+      ['cam04-archive.zip', '2,4 МБ · архив записей КАМ-04'],
+      ['readme.txt', '1 КБ · служебная записка'],
+    ]
+    for (const [name, note] of files) {
+      this.link(ctx, name, x, y, () => this.navigate('http://intranet.local/gate/'), 13)
+      this.serif(ctx, 11)
+      ctx.fillStyle = '#5c5c54'
+      ctx.fillText(note, x + 190, y)
+      y += 22
+    }
+
+    y += 8
+    this.serif(ctx, 11)
+    ctx.fillStyle = '#5c5c54'
+    ctx.fillText('Скачивание файлов заблокировано политикой узла.', x, y)
+    y += 22
+    this.link(ctx, '← На главную', x, y, () => this.go('home'))
+  }
+
+  private drawGate(ctx: CanvasRenderingContext2D, p: Rect): void {
+    const x = p.x + 20
+    let y = p.y + 26
+
+    this.serif(ctx, 16, true)
+    ctx.fillStyle = '#23231c'
+    ctx.fillText('СЛУЖЕБНЫЙ ДОСТУП', x, y)
+    y += 20
+    this.rule(ctx, x, y, p.w - 40)
+    y += 24
+
+    this.serif(ctx, 13)
+    ctx.fillStyle = '#23231c'
+    for (const line of wrap(
+      ctx,
+      'Для доступа к архиву записей нужен ключ службы безопасности. Ключ выдаётся только оператору на смене.',
+      p.w - 60,
+      13,
+    )) {
+      ctx.fillText(line, x, y)
+      y += 17
+    }
+
+    y += 16
+    const btn: Rect = { x, y: y - 12, w: 190, h: 26 }
+    panel(ctx, btn, true, 2)
+    this.serif(ctx, 12, false, 'center')
+    ctx.fillStyle = C.text
+    ctx.fillText('Запросить ключ', btn.x + btn.w / 2, btn.y + btn.h / 2)
+    this.hits.push({
+      r: btn,
+      fn: () => {
+        this.status = 'запрос отправлен службе безопасности'
+        this.sound.message()
+      },
+    })
+
+    y += 38
+    this.serif(ctx, 11)
+    ctx.fillStyle = '#5c5c54'
+    ctx.fillText('Ответ придёт на рабочую почту.', x, y)
+    y += 28
+    this.link(ctx, '← На главную', x, y, () => this.go('home'))
+  }
+
+  private drawMail(ctx: CanvasRenderingContext2D, p: Rect): void {
+    const x = p.x + 20
+    let y = p.y + 26
+
+    this.serif(ctx, 16, true)
+    ctx.fillStyle = '#23231c'
+    ctx.fillText('ПОЧТОВЫЙ ШЛЮЗ', x, y)
+    y += 20
+    this.rule(ctx, x, y, p.w - 40)
+    y += 24
+
+    this.serif(ctx, 13)
+    ctx.fillStyle = '#23231c'
+    for (const line of wrap(
+      ctx,
+      'Веб-почта доступна только с рабочей станции оператора. Откройте приложение «Почта» на рабочем столе.',
+      p.w - 60,
+      13,
+    )) {
+      ctx.fillText(line, x, y)
+      y += 17
+    }
+
+    y += 18
+    this.serif(ctx, 11)
+    ctx.fillStyle = '#5c5c54'
+    ctx.fillText('Сеанс: локальный · шифрование: выключено', x, y)
+    y += 28
+    this.link(ctx, '← На главную', x, y, () => this.go('home'))
+  }
+
+  private drawHelp(ctx: CanvasRenderingContext2D, p: Rect): void {
+    const x = p.x + 20
+    let y = p.y + 26
+
+    this.serif(ctx, 16, true)
+    ctx.fillStyle = '#23231c'
+    ctx.fillText('СПРАВКА NETSCAPE NAVIGATOR 4.0', x, y)
+    y += 20
+    this.rule(ctx, x, y, p.w - 40)
+    y += 22
+
+    const tips = [
+      'Адресная строка принимает адреса вида http://map.local/map',
+      'Enter — перейти, Esc — снять фокус, Ctrl+V — вставить ссылку.',
+      'На карте щёлкните по камере — её адрес скопируется в буфер.',
+      'Вставьте скопированный адрес в строку — откроется камера.',
+      'Кнопки «Назад» и «Вперёд» ходят по истории переходов.',
+    ]
+    for (const tip of tips) {
+      this.serif(ctx, 12)
+      ctx.fillStyle = '#23231c'
+      for (const line of wrap(ctx, '• ' + tip, p.w - 60, 12)) {
+        ctx.fillText(line, x, y)
+        y += 16
+      }
+      y += 3
+    }
+
+    y += 8
+    this.rule(ctx, x, y, p.w - 40)
+    y += 18
+    this.serif(ctx, 13, true)
+    ctx.fillStyle = '#23231c'
+    ctx.fillText('КАРТА КОМПЛЕКСА', x, y)
+    y += 18
+    this.link(ctx, MAP_URL, x, y, () => this.navigate(MAP_URL), 12)
+    y += 18
+    this.serif(ctx, 11)
+    ctx.fillStyle = '#5c5c54'
+    ctx.fillText('базовый адрес из domains.txt · камеры копируются с карты', x, y)
+
+    y += 22
+    this.link(ctx, '← На главную', x, y, () => this.go('home'))
+  }
+
+  private drawExternal(ctx: CanvasRenderingContext2D, p: Rect): void {
+    const cx = p.x + p.w / 2
+    let y = p.y + 42
+
+    this.serif(ctx, 18, true, 'center')
+    ctx.fillStyle = '#1a1a6b'
+    ctx.fillText('ВНЕШНЯЯ СЕТЬ', cx, y)
+    y += 34
+
+    this.serif(ctx, 12, false, 'center')
+    ctx.fillStyle = '#23231c'
+    for (const line of wrap(
+      ctx,
+      'Служебный сегмент не имеет выхода в интернет. Внутренний обозреватель не умеет показывать современные сайты.',
+      p.w - 120,
+      12,
+    )) {
+      ctx.fillText(line, cx, y)
+      y += 16
+    }
+
+    y += 12
+    this.serif(ctx, 11, false, 'center')
+    ctx.fillStyle = '#2f6b2f'
+    ctx.fillText(this.url, cx, y)
+
+    y += 34
+    const btn: Rect = { x: cx - 120, y: y - 14, w: 240, h: 28 }
+    panel(ctx, btn, true, 2)
+    this.serif(ctx, 12, false, 'center')
+    ctx.fillStyle = C.text
+    ctx.fillText('Открыть в системном браузере', cx, btn.y + btn.h / 2)
+    this.hits.push({ r: btn, fn: () => this.openExternal() })
+
+    y += 44
+    this.serif(ctx, 11, false, 'center')
+    ctx.fillStyle = '#5c5c54'
+    ctx.fillText('Ссылка откроется вне игры, в обычном браузере.', cx, y)
+
+    y += 30
+    this.link(ctx, '← На главную', p.x + 20, y, () => this.go('home'))
+  }
+
+  private drawNotFound(ctx: CanvasRenderingContext2D, p: Rect): void {
+    const x = p.x + 20
+    let y = p.y + 32
+
+    this.serif(ctx, 20, true)
+    ctx.fillStyle = '#8a1c1c'
+    ctx.fillText('404 · ДОКУМЕНТ НЕ НАЙДЕН', x, y)
+    y += 24
+    this.rule(ctx, x, y, p.w - 40)
+    y += 24
+
+    this.serif(ctx, 13)
+    ctx.fillStyle = '#23231c'
+    ctx.fillText('На узле нет страницы по адресу:', x, y)
+    y += 20
+    this.serif(ctx, 11)
+    ctx.fillStyle = '#2f6b2f'
+    ctx.fillText(this.url, x, y)
+    y += 28
+    this.serif(ctx, 12)
+    ctx.fillStyle = '#5c5c54'
+    for (const line of wrap(
+      ctx,
+      'Проверьте адрес или вернитесь на главную страницу узла.',
+      p.w - 60,
+      12,
+    )) {
+      ctx.fillText(line, x, y)
+      y += 16
+    }
+
+    y += 16
+    this.link(ctx, '← На главную', x, y, () => this.go('home'))
   }
 
   click(x: number, y: number, _r: Rect): void {
+    // Клик по полю ввода ставит в него фокус и выделяет строку целиком.
+    const field = this.fields.find((f) => inside(f.r, x, y))
+    if (field) {
+      this.focusField(field.kind)
+      return
+    }
+    this.focus = null
+    this.selectAll = false
     for (let i = this.hits.length - 1; i >= 0; i--) {
       if (inside(this.hits[i].r, x, y)) {
         this.hits[i].fn()
         return
       }
+    }
+    const page = this.pageRect
+    if (page && inside(page, x, y)) {
+      if (this.page === 'cam') this.camView?.click(x, y, page)
+      else if (this.page === 'map') this.mapView?.click(x, y, page)
     }
   }
 }

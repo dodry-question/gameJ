@@ -76,7 +76,7 @@ const FOLDERS: Array<[Folder, string]> = [
 
 export class Mail implements App {
   title = 'Почта'
-  /** Архив скачали — рабочий стол запускает «установку». */
+  /** Вложение скачали — рабочий стол сохраняет файл на стол. */
   onDownload?: () => void
   /** Прочитано письмо похитителей — доступ к замку камеры открыт. */
   onThreatRead?: () => void
@@ -91,24 +91,26 @@ export class Mail implements App {
     this.sound = sound
   }
 
-  /** Новое письмо с архивом приходит по ходу пролога. */
+  /** Новое письмо с адресом карты приходит по ходу пролога. */
   deliver(): void {
     this.letters.unshift({
       from: 'Служба безопасности',
-      subject: 'КАМ-04: требуется выгрузка архива',
+      subject: 'Адрес карты наблюдения',
       date: '03:11',
       body:
         'Оператор,\n\n' +
-        'в архиве КАМ-04 есть запись с камеры 04 за 03:06. На записи — женщина. Она жива.\n\n' +
-        'Выгрузка во вложении. Скачайте файл и откройте его на рабочем столе.',
+        'внутренний узел снова отваливается, поэтому адрес карты — в файле.\n\n' +
+        'Открой domains.txt в блокноте и перенеси адрес в Netscape. На карте ' +
+        'видны камеры блока C. Щёлкни по камере — её адрес скопируется в буфер.\n\n' +
+        'Вставь его в строку браузера и смотри.',
       read: false,
-      attachment: { name: 'cam04-archive.zip', size: '2,4 МБ · ZIP-архив', downloaded: false },
+      attachment: { name: 'domains.txt', size: '1 КБ · текстовый файл', downloaded: false },
     })
     this.folder = 'in'
     this.selected = 0
   }
 
-  /** Письмо от похитителей: приходит после первого запуска cam04.exe. */
+  /** Письмо от похитителей: приходит при первом открытии страницы камеры. */
   deliverThreat(): void {
     this.letters.unshift({
       from: 'Неизвестный отправитель',
@@ -279,7 +281,7 @@ export class Mail implements App {
     ctx.stroke()
 
     text(ctx, a.name, box.x + 42, box.y + 30, { size: 12, bold: true, color: C.ink })
-    text(ctx, a.downloaded ? 'загружено · установка на рабочий стол' : a.size, box.x + 42, box.y + 43, {
+    text(ctx, a.downloaded ? 'загружено · сохранение на рабочий стол' : a.size, box.x + 42, box.y + 43, {
       size: 10,
       color: C.textDim,
     })

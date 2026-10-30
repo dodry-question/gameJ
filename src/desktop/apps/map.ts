@@ -6,28 +6,40 @@
  * теряет, кружок медленно гаснет на последнем замеченном месте, как радар в CS.
  * Приложение приезжает на стол вместе с распаковкой cam04-archive.zip.
  */
-import { fill, panel, setFont, text } from '../draw'
+import { fill, inside, panel, setFont, text } from '../draw'
 import type { Rect } from '../draw'
 import type { App } from '../app'
 import { getCctv } from '../../cctv'
+import { writeClipboard } from '../clipboard'
+import { CAM_URL } from '../domains'
 
 /** Границы пола в мировых координатах (комната 6×5 с центром (0, -0.5)). */
 const WORLD = { x0: -3, x1: 3, z0: -3, z1: 2 }
 
 export class MapApp implements App {
-  title = 'Сеть наблюдения · блок C'
+  title = 'Карта комплекса'
+  /** Адрес камеры скопирован — браузер показывает это в строке состояния. */
+  onCopy?: (url: string) => void
   /** Яркость метки объекта: 1 — в кадре, плавно гаснет после потери. */
   private alpha = 0
   private lastSeen: { x: number; z: number } | null = null
+  private camHit: Rect | null = null
+  private message = ''
+  private messageUntil = 0
 
   tick(): boolean {
+    let changed = false
+    if (this.message && performance.now() >= this.messageUntil) {
+      this.message = ''
+      changed = true
+    }
     const cctv = getCctv()
     if (!cctv.loaded || cctv.gone) {
       if (this.alpha > 0) {
         this.alpha = 0
         return true
       }
-      return false
+      return changed
     }
     const pos = cctv.girlPos
     if (pos && cctv.sees(pos.x, pos.z)) {
@@ -36,20 +48,20 @@ export class MapApp implements App {
         this.alpha = Math.min(1, this.alpha + 0.25)
         return true
       }
-      return false
+      return changed
     }
     // не в кадре — метка медленно гаснет на последнем замеченном месте
     if (this.alpha > 0) {
       this.alpha = Math.max(0, this.alpha - 0.006)
       return true
     }
-    return false
+    return changed
   }
 
   draw(ctx: CanvasRenderingContext2D, r: Rect): void {
     fill(ctx, r, '#12100c')
 
-    const area: Rect = { x: r.x + 18, y: r.y + 18, w: r.w - 36, h: r.h - 66 }
+    const area: Rect = { x: r.x + 18, y: r.y + 30, w: r.w - 36, h: r.h - 96 }
     fill(ctx, area, '#17211b')
     ctx.strokeStyle = '#3d4a3f'
     ctx.strokeRect(area.x + 0.5, area.y + 0.5, area.w - 1, area.h - 1)
@@ -133,6 +145,13 @@ export class MapApp implements App {
     ctx.textAlign = 'center'
     ctx.fillText('04', p.mx, p.my + 1)
     ctx.textAlign = 'left'
+    this.camHit = { x: node.x - 4, y: node.y - 4, w: node.w + 8, h: node.h + 8 }
+    // подсказка: камера на карте — ссылка, а не просто точка
+    ctx.font = '9px "MS Sans Serif", sans-serif'
+    ctx.fillStyle = '#9fc7a4'
+    ctx.textAlign = 'center'
+    ctx.fillText('нажми', p.mx, p.my + 22)
+    ctx.textAlign = 'left'
 
     // объект: горит, пока в кадре, гаснет на последнем месте после потери
     if (this.lastSeen && this.alpha > 0) {
@@ -153,7 +172,19 @@ export class MapApp implements App {
     }
 
     // подвал: подсказка и статус
-    text(ctx, 'Блок C · КАМ-04', r.x + 12, r.y + r.h - 16, {
+    if (this.message) {
+      const bw = Math.min(r.w - 24, 320)
+      const banner: Rect = { x: r.x + (r.w - bw) / 2, y: r.y + r.h - 54, w: bw, h: 24 }
+      panel(ctx, banner, true, 1)
+      fill(ctx, { x: banner.x + 2, y: banner.y + 2, w: banner.w - 4, h: banner.h - 4 }, '#e8e4c8')
+      text(ctx, this.message, banner.x + banner.w / 2, banner.y + banner.h / 2, {
+        size: 10,
+        bold: true,
+        color: '#2b4a2b',
+        align: 'center',
+      })
+    }
+    text(ctx, 'Карта комплекса · КАМ-04', r.x + 12, r.y + r.h - 16, {
       size: 10,
       color: '#8f948d',
     })
@@ -174,7 +205,11 @@ export class MapApp implements App {
     }
   }
 
-  click(_x: number, _y: number, _r: Rect): void {
-    // в комнате одна камера — переключать нечего
+  click(x: number, y: number, _r: Rect): void {
+    if (!this.camHit || !inside(this.camHit, x, y)) return
+    writeClipboard(CAM_URL)
+    this.message = 'Ссылка скопирована в буфер обмена'
+    this.messageUntil = performance.now() + 4000
+    this.onCopy?.(CAM_URL)
   }
 }
