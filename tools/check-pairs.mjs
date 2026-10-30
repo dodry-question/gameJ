@@ -129,7 +129,8 @@ result.failNotGreen = beforeFail.green === false
 const failBtns = await page.evaluate(() => window.__pairs.debugButtons())
 await click(failBtns.pause.x, failBtns.pause.y, 600)
 result.failed = (await pairs()).state
-await shot('08-failed')
+result.cinematic = await page.evaluate(() => window.__desk.debugInfo().pairsLost)
+await shot('08-sorry') // плашка «Мне очень жаль», хэш красный
 
 console.log(JSON.stringify(result, null, 2))
 console.log(errors.length ? `ОШИБКИ:\n${errors.join('\n')}` : 'ошибок в консоли нет')

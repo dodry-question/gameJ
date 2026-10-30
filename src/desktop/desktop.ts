@@ -1,4 +1,4 @@
-import { C, bevel, fill, inside, panel, text } from './draw'
+import { C, bevel, ellipsis, fill, inside, panel, text } from './draw'
 import type { Rect } from './draw'
 import { drawIcon } from './icons'
 import type { App } from './app'
@@ -197,11 +197,18 @@ export class Desktop {
   private pairsLostFlag = false
   /** Заметки оператора: важные реплики с кухни попадают в блокнот. */
   private noteText = ''
-  /** Сцена «ВЫ ПРОИГРАЛИ»: момент показать и что показываем. */
-  private deadAt = 0
+  /** Она погибла: с фазы выключения ПК клик перезапускает смену. */
   private girlDead = false
   /** Она выбралась через дверь: конец демо. */
   private escaped = false
+  /**
+   * Кино провала: ввод залочен, рабочий стол сам ведёт сцену — плашка
+   * «Это на твоей совести», выключение ПК, темнота с дыханием.
+   */
+  private cinematic = false
+  private cinePhase: 'none' | 'plaque' | 'shutdown' | 'black' = 'none'
+  private cineAt = 0
+  private offPlayed = false
 
   private drag: { win: Win; ox: number; oy: number } | null = null
   /** Протяжка внутри окна: выделение текста в блокноте. */
@@ -230,15 +237,21 @@ export class Desktop {
       y: 8 + i * 94,
     }))
     ;(window as unknown as { __desk?: Desktop }).__desk = this
-    // Исходы кухни: конец демо и смерть от маньяка — их рисует рабочий стол.
+    // Исходы кухни: конец демо и кино провала — их рисует рабочий стол.
     const cctv = getCctv()
     cctv.onEscaped = () => {
       this.escaped = true
       this.dirty = true
     }
-    cctv.onDead = () => {
-      this.deadAt = performance.now() + 1400
-      this.dirty = true
+    cctv.onAttackPhase = (phase) => {
+      if (phase === 'near') {
+        // за секунду до касания: всё молчит, на экране — «Это на твоей совести»
+        this.sound.muteAll()
+        this.cinePhase = 'plaque'
+        this.cineAt = performance.now()
+        this.dirty = true
+      }
+      // 'touch' ничего не добавляет: кадр камеры застыл, ждём выключения
     }
     cctv.onNoteAppend = (line) => this.appendNote(line)
     // Через пять секунд после входа игрок должен понять, что от него хотят.
@@ -271,10 +284,31 @@ export class Desktop {
       this.dirty = true
     }
 
-    if (this.deadAt && now >= this.deadAt) {
-      this.girlDead = true
-      this.deadAt = 0
-      this.sound.error()
+    // Кино провала: плашка → выключение ПК → темнота с дыханием.
+    if (this.cinePhase === 'plaque' && now - this.cineAt >= 5000) {
+      this.cinePhase = 'shutdown'
+      this.cineAt = now
+      this.girlDead = true // с этого момента клик перезапускает смену
+      this.sound.unmute()
+      this.sound.shutdownChime()
+      this.dirty = true
+    }
+    if (this.cinePhase === 'shutdown') {
+      this.dirty = true
+      const t = (now - this.cineAt) / 1000
+      if (t >= 1.7 && !this.offPlayed) {
+        this.offPlayed = true
+        this.sound.monitorOff()
+      }
+      if (t >= 2.2) {
+        this.cinePhase = 'black'
+        this.cineAt = now
+        this.sound.playDreadBreath(26000)
+        this.dirty = true
+      }
+    }
+    if (this.cinePhase === 'black') {
+      // кадр чёрный, дыхание громчает сама шина; перерисовка ради подсказки
       this.dirty = true
     }
 
@@ -283,13 +317,19 @@ export class Desktop {
       if (win.min) continue
       if (win.app.tick?.()) this.dirty = true
     }
-    // Дыхание слышно только пока в TDS открыт прямой эфир камеры.
-    const cameraOpen = this.windows.some(
-      (w) => !w.min && w.app instanceof Tds && w.app.viewingCamera,
-    )
-    if (!cameraOpen) this.sound.setBreathing(null)
-    // Звуки комнаты с камеры идут своей тихой шиной, пока страница открыта.
-    this.sound.setCameraAudio(cameraOpen)
+    // Дыхание слышно только пока в TDS открыт прямой эфир камеры; в кино
+    // провала фоновые шины замолкают навсегда, даже если камера открыта.
+    if (this.cinematic) {
+      this.sound.setBreathing(null)
+      this.sound.setCameraAudio(false)
+    } else {
+      const cameraOpen = this.windows.some(
+        (w) => !w.min && w.app instanceof Tds && w.app.viewingCamera,
+      )
+      if (!cameraOpen) this.sound.setBreathing(null)
+      // Звуки комнаты с камеры идут своей тихой шиной, пока страница открыта.
+      this.sound.setCameraAudio(cameraOpen)
+    }
 
     const minute = new Date().getMinutes()
     if (minute !== this.lastMinute) {
@@ -300,6 +340,8 @@ export class Desktop {
 
   /** Клавиша активному окну: сейчас это нужно адресной строке браузера. */
   key(e: KeyboardEvent): boolean {
+    // Кино провала само ведёт сцену: клавиатура ничего не должна трогать.
+    if (this.cinematic) return true
     const win = this.activeWin()
     if (!win || !win.app.key) return false
     const handled = win.app.key(e)
@@ -335,34 +377,80 @@ export class Desktop {
     if (this.install) this.drawInstall()
     if (this.toast) this.drawToast()
     if (this.volumeOpen) this.drawVolume()
-    if (this.girlDead) this.drawGameOver()
+    if (this.cinePhase !== 'none') this.drawCinematic()
     else if (this.escaped) this.drawEscaped()
     this.drawCursor()
     this.scanlines()
   }
 
-  /** Провал: экран гаснет и пишет, что вы проиграли. */
-  private drawGameOver(): void {
+  /**
+   * Кино провала: «Это на твоей совести» → выключение ПК → темнота,
+   * из которой неспеша дышит кто-то ещё. Клик перезапускает смену.
+   */
+  private drawCinematic(): void {
     const ctx = this.ctx
-    fill(ctx, { x: 0, y: 0, w: DESKTOP_W, h: DESKTOP_H }, '#050505')
-    text(ctx, 'ВЫ ПРОИГРАЛИ', DESKTOP_W / 2, DESKTOP_H / 2 - 30, {
-      size: 34,
-      bold: true,
-      color: '#b23a2e',
-      align: 'center',
-    })
-    text(ctx, 'камера 05 потеряла сигнал. смена прервана.', DESKTOP_W / 2, DESKTOP_H / 2 + 8, {
-      size: 12,
-      color: '#8a8a80',
-      align: 'center',
-    })
-    const btn: Rect = { x: DESKTOP_W / 2 - 110, y: DESKTOP_H / 2 + 44, w: 220, h: 30 }
-    panel(ctx, btn, true, 2)
-    text(ctx, 'НАЧАТЬ СМЕНУ ЗАНОВО', btn.x + btn.w / 2, btn.y + btn.h / 2, {
-      size: 12,
-      bold: true,
-      align: 'center',
-    })
+    const now = performance.now()
+    const full = { x: 0, y: 0, w: DESKTOP_W, h: DESKTOP_H }
+
+    if (this.cinePhase === 'plaque') {
+      // всё молчит: только слова на чёрном
+      fill(ctx, full, '#020202')
+      text(ctx, 'Это на твоей совести', DESKTOP_W / 2, DESKTOP_H / 2 - 12, {
+        size: 30,
+        bold: true,
+        color: '#c8c4b8',
+        align: 'center',
+      })
+      return
+    }
+
+    if (this.cinePhase === 'shutdown') {
+      fill(ctx, full, '#000000')
+      const t = (now - this.cineAt) / 1000
+      if (t < 0.3) {
+        // CRT-схлопывание: изображение сжимается в яркую линию и точку
+        const p = t / 0.3
+        const lineH = Math.max(2, Math.round(DESKTOP_H * (1 - p)))
+        fill(
+          ctx,
+          { x: 0, y: Math.round((DESKTOP_H - lineH) / 2), w: DESKTOP_W, h: lineH },
+          '#d8d8d0',
+        )
+        if (p > 0.7) {
+          const w = Math.round(DESKTOP_W * (1 - (p - 0.7) / 0.3))
+          fill(
+            ctx,
+            { x: Math.round((DESKTOP_W - w) / 2), y: DESKTOP_H / 2 - 1, w, h: 2 },
+            '#f0f0e8',
+          )
+        }
+        return
+      }
+      // классический экран «питание можно отключить»
+      text(ctx, 'Теперь питание компьютера', DESKTOP_W / 2, DESKTOP_H / 2 - 22, {
+        size: 20,
+        bold: true,
+        color: '#d8963c',
+        align: 'center',
+      })
+      text(ctx, 'можно отключить.', DESKTOP_W / 2, DESKTOP_H / 2 + 6, {
+        size: 20,
+        bold: true,
+        color: '#d8963c',
+        align: 'center',
+      })
+      return
+    }
+
+    // black: темнота и дыхание; через десяток секунд — тихая подсказка
+    fill(ctx, full, '#000000')
+    if (now - this.cineAt > 12000 && Math.floor(now / 900) % 2 === 0) {
+      text(ctx, 'клик — новая смена', DESKTOP_W / 2, DESKTOP_H / 2 + 120, {
+        size: 12,
+        color: 'rgba(120, 120, 112, 0.4)',
+        align: 'center',
+      })
+    }
   }
 
   /** Она выбралась: конец демо-версии. */
@@ -562,7 +650,14 @@ export class Desktop {
     ctx.beginPath()
     ctx.rect(bar.x, bar.y, bar.w - 54, bar.h)
     ctx.clip()
-    text(ctx, win.app.title, bar.x + 5, bar.y + 8.5, { size: 12, bold: true, color: C.titleText })
+    // длинное имя не должно дотягиваться до кнопок свернуть/развернуть/закрыть
+    text(
+      ctx,
+      ellipsis(ctx, win.app.title, bar.w - 54 - 12, 12, true),
+      bar.x + 5,
+      bar.y + 8.5,
+      { size: 12, bold: true, color: C.titleText },
+    )
     ctx.restore()
 
     for (const b of buttons) {
@@ -997,9 +1092,11 @@ export class Desktop {
     for (const win of this.windows) {
       const r: Rect = { x, y: top + 3, w: 148, h: 23 }
       panel(ctx, r, !(win === active && !win.min), 2)
-      text(ctx, win.app.title, r.x + 7, r.y + 11, {
+      // длинный заголовок не должен налезать на соседнюю кнопку — многоточие
+      const bold = win === active && !win.min
+      text(ctx, ellipsis(ctx, win.app.title, r.w - 14, 12, bold), r.x + 7, r.y + 11, {
         size: 12,
-        bold: win === active && !win.min,
+        bold,
         color: win.min ? C.textDim : C.text,
       })
       x += 151
@@ -1263,13 +1360,38 @@ export class Desktop {
     this.dirty = true
   }
 
-  /** Головоломка-пары проиграна: мурзик, маньяк и «ВЫ ПРОИГРАЛИ». */
+  /**
+   * Перехват провален: кино на всей сцене. Сразу — плашка «Мне очень
+   * жаль» на странице игры и мурзик, который за весь путь маньяка громчает
+   * до предела; через пару секунд — бросок на камеру 05 и её лок.
+   */
   private pairsLost(): void {
     this.pairsLostFlag = true
-    this.sound.playMurzik()
-    getCctv().maniacAttack()
-    this.deadAt = performance.now() + 4200
+    this.cinematic = true
+    // мурзик громчает ровно до «за секунду до касания»: 2.2 с плашки + 9 с пути
+    this.sound.playMurzikDread(11200)
+    window.setTimeout(() => {
+      this.throwToCamera()
+      getCctv().maniacAttack()
+      this.dirty = true
+    }, 2200)
     this.dirty = true
+  }
+
+  /** Кино провала: зритель смотрит камеру 05, окно терминала залочено. */
+  private throwToCamera(): void {
+    const tds = this.cache.get('tds')
+    if (tds instanceof Tds) {
+      tds.forceChannel('05')
+      const win = this.windows.find((w) => w.app === tds)
+      if (win) {
+        win.min = false
+        this.raise(win)
+      } else this.open('tds')
+    } else {
+      // терминал ещё не ставился — открываем отладкой, гейты уже не важны
+      this.debugOpenCamera()
+    }
   }
 
   /** Она сказала что-то важное: блокнот-заметки открывается с новой строкой. */
@@ -1417,6 +1539,9 @@ export class Desktop {
       location.reload()
       return
     }
+
+    // Кино провала ведёт сцена: пока не погас экран, клики не работают.
+    if (this.cinematic) return
 
     // Модальное окно установки перекрывает рабочий стол целиком.
     if (this.install) return

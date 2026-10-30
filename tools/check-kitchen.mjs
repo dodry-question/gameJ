@@ -1,6 +1,6 @@
 // Полная проверка кухни: переход → КАМ-05 → скан → команды (нож, холодильник,
 // мясо, принтер) → pairs.local (перехват потока) → пароль → печать → дверь →
-// «ОНА УШЛА». Отдельно — провал: мурзик, маньяк, экран «ВЫ ПРОИГРАЛИ».
+// «ОНА УШЛА». Отдельно — провал: кино с маньяком, плашки, выключение ПК.
 //   node tools/check-kitchen.mjs [url] [outDir]
 import { chromium } from 'playwright-core'
 import { mkdirSync } from 'node:fs'
@@ -166,7 +166,7 @@ await page.waitForFunction(() => window.__desk?.escaped === true, null, { timeou
 result.escaped = true
 await shot('07-escaped')
 
-// ── 7. Провал: мурзик, маньяк, «ВЫ ПРОИГРАЛИ» ────────────────────────
+// ── 7. Провал: кино — маньяк идёт по кухне, выключение ПК ────────────
 await page.reload({ waitUntil: 'networkidle' })
 await page.waitForTimeout(1200)
 await page.waitForFunction(
@@ -184,11 +184,15 @@ await page.evaluate(() => {
   // тот же путь короче: сцена провала запускается напрямую
   window.__desk.pairsLost()
 })
-await page.waitForTimeout(2600)
-await shot('08-maniac')
-await page.waitForFunction(() => window.__desk?.girlDead === true, null, { timeout: 12000 })
+await page.waitForTimeout(1000)
+await shot('08-sorry') // плашка «Мне очень жаль» на странице игры
+await page.waitForTimeout(3500)
+await shot('08-maniac') // он в кадре камеры 05, идёт к ней
+await page.waitForFunction(() => window.__desk?.girlDead === true, null, { timeout: 30000 })
 result.dead = true
-await shot('09-game-over')
+await shot('09-shutdown') // «питание можно отключить»
+await page.waitForTimeout(2500)
+await shot('10-black') // темнота, из которой дышат
 
 console.log(JSON.stringify(result, null, 2))
 console.log(errors.length ? `ОШИБКИ:\n${errors.join('\n')}` : 'ошибок в консоли нет')

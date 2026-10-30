@@ -79,6 +79,14 @@ export class Tds implements App {
     this.feed.startNow()
   }
 
+  /** Кино провала: рабочий стол силой открывает эфир нужного канала. */
+  forceChannel(ch: '04' | '05'): void {
+    this.screen = 'feed'
+    this.firstViewed = true
+    this.feed.setChannel(ch)
+    this.feed.startNow()
+  }
+
   /** Состояние экрана и точки узлов — для проверок из tools/. */
   debugInfo(): {
     screen: Screen

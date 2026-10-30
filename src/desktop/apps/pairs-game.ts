@@ -3,7 +3,7 @@
  *
  * Игра: осу-кэтч на битах. По полю падают чипы 0 и 1, квадрат-ловец ездит
  * у линии ловли (A/D или стрелки). Нужно поймать случайное число бит
- * (7–13): с каждым пойманным битом хэш-подпись в углу перегенерируется,
+ * (15–23): с каждым пойманным битом хэш-подпись в углу перегенерируется,
  * а в зелёном окне (±2 от цели) она подсвечивается. Дальше — не переловить:
  * успеть нажать мышью кнопку «ПАУЗА» в другом углу и кликнуть по зелёному
  * хэшу — он выдаст код выхода из 4 цифр. Перелов или пауза вне окна —
@@ -21,16 +21,20 @@ type State = 'intro' | 'play' | 'paused' | 'won' | 'failed'
 type Bit = { x: number; y: number; v: number; bit: 0 | 1 }
 
 const WINDOW = 2 // зелёное окно подписи: ±2 элемента от цели
+const TARGET_MIN = 15 // цель ловли: случайное 15–23 — сбор долгий
+const TARGET_MAX = 23
 const CATCHER_W = 42
 const CATCHER_H = 26
 const CATCHER_SPEED = 540 // px/с
 const BIT = 20 // размер чипа с битом
-const FALL_MIN = 290 // скорость падения, px/с
-const FALL_MAX = 380
-const SPAWN_MIN = 360 // пауза между битами, мс
-const SPAWN_MAX = 600
+const FALL_MIN = 320 // скорость падения, px/с
+const FALL_MAX = 430
+const SPAWN_MIN = 200 // пауза между битами, мс: биты летят густо
+const SPAWN_MAX = 380
+const FAST_CHANCE = 0.18 // часть бит летит быстрее
+const GREEN_SURGE = 0.5 // в зелёном окне поток сходит с ума: спавн вдвое чаще
 const TOP_H = 22
-const BOTTOM_H = 72
+const BOTTOM_H = 78
 
 const rand = (a: number, b: number) => a + Math.random() * (b - a)
 
@@ -135,7 +139,7 @@ export class PairsGame {
 
   private newSession(): void {
     this.state = 'intro'
-    this.target = 7 + Math.floor(Math.random() * 7)
+    this.target = TARGET_MIN + Math.floor(Math.random() * (TARGET_MAX - TARGET_MIN + 1))
     this.caught = 0
     this.stream = ''
     this.hash = '···· ···· ···· ····'
@@ -170,15 +174,16 @@ export class PairsGame {
         Math.min(this.fw - CATCHER_W / 2, this.cx + dir * CATCHER_SPEED * dt),
       )
     }
-    // спавн бит
+    // спавн бит: в зелёном окне поток торопит — успей уйти от перелова
     if (now >= this.spawnAt) {
+      const v = rand(FALL_MIN, FALL_MAX) * (Math.random() < FAST_CHANCE ? 1.3 : 1)
       this.bits.push({
         x: rand(BIT, this.fw - BIT),
         y: -BIT,
-        v: rand(FALL_MIN, FALL_MAX),
+        v,
         bit: Math.random() < 0.5 ? 0 : 1,
       })
-      this.spawnAt = now + rand(SPAWN_MIN, SPAWN_MAX)
+      this.spawnAt = now + rand(SPAWN_MIN, SPAWN_MAX) * (this.green ? GREEN_SURGE : 1)
     }
     // падение, ловля и пропуск
     const top = this.fh - CATCHER_H
@@ -312,7 +317,7 @@ export class PairsGame {
       w: Math.min(360, Math.floor(r.w * 0.46)),
       h: BOTTOM_H - 14,
     }
-    const pauseBtn: Rect = { x: r.x + r.w - 142, y: hashPanel.y + 10, w: 132, h: 40 }
+    const pauseBtn: Rect = { x: r.x + r.w - 164, y: hashPanel.y + 8, w: 156, h: 48 }
     this.geo = { field, pause: pauseBtn, hash: hashPanel }
 
     this.drawTop(ctx, r)
@@ -405,33 +410,47 @@ export class PairsGame {
     ctx.lineTo(r.x + r.w, r.y + r.h - BOTTOM_H + 0.5)
     ctx.stroke()
 
-    // хэш-подпись: копится с битами, в окне подсвечивается зелёным
+    // хэш-подпись: копится с битами, в окне подсвечивается зелёным,
+    // при перелове — краснеет и рабочий стол уводит смотреть камеру
     const green = this.green
-    if (green) {
+    const red = this.state === 'failed'
+    if (red) {
+      const pulse = 0.5 + 0.5 * Math.sin(now / 120)
+      ctx.shadowColor = '#e8523a'
+      ctx.shadowBlur = 8 + pulse * 12
+    } else if (green) {
       const pulse = 0.5 + 0.5 * Math.sin(now / 140)
       ctx.shadowColor = '#7fe08a'
       ctx.shadowBlur = 6 + pulse * 10
     }
-    fill(ctx, hp, green ? '#123018' : '#0a1810')
-    ctx.strokeStyle = green ? '#7fe08a' : '#2c4a34'
+    fill(ctx, hp, red ? '#301010' : green ? '#123018' : '#0a1810')
+    ctx.strokeStyle = red ? '#e8523a' : green ? '#7fe08a' : '#2c4a34'
     ctx.strokeRect(hp.x + 0.5, hp.y + 0.5, hp.w - 1, hp.h - 1)
     ctx.shadowBlur = 0
     text(ctx, 'ХЭШ-ПОДПИСЬ', hp.x + 8, hp.y + 10, { size: 8, bold: true, color: '#5f7f66' })
     ctx.font = `bold ${Math.round(15 * 1.12)}px Consolas, monospace`
-    ctx.fillStyle = green ? '#aef2b0' : '#7e9a84'
+    ctx.fillStyle = red ? '#e88a76' : green ? '#aef2b0' : '#7e9a84'
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
     ctx.fillText(this.hash, hp.x + hp.w / 2, hp.y + hp.h / 2 + 6)
     ctx.textAlign = 'left'
-    const label =
-      this.state === 'paused'
+    const label = red
+      ? 'ПОДПИСЬ ПОВРЕЖДЕНА'
+      : this.state === 'paused'
         ? Math.floor(now / 300) % 2 === 0
           ? 'КЛИКНИ ПО ХЭШУ'
           : ''
         : green
           ? 'ПОДПИСЬ ВАЛИДНА'
           : 'ОЖИДАНИЕ ОКНА'
-    if (label) text(ctx, label, hp.x + hp.w - 8, hp.y + 10, { size: 8, bold: true, color: green ? '#aef2b0' : '#5f7f66', align: 'right' })
+    if (label) {
+      text(ctx, label, hp.x + hp.w - 8, hp.y + 10, {
+        size: 8,
+        bold: true,
+        color: red ? '#e88a76' : green ? '#aef2b0' : '#5f7f66',
+        align: 'right',
+      })
+    }
 
     // кнопка паузы: только мышь, поэтому в другом углу
     panel(ctx, pb, true, 1)
@@ -440,11 +459,11 @@ export class PairsGame {
       ctx.strokeRect(pb.x + 1.5, pb.y + 1.5, pb.w - 3, pb.h - 3)
     }
     ctx.fillStyle = '#2a2a24'
-    const bx = pb.x + 24
+    const bx = pb.x + 36
     const by = pb.y + pb.h / 2 - 6
     ctx.fillRect(bx, by, 4, 12)
     ctx.fillRect(bx + 8, by, 4, 12)
-    text(ctx, 'ПАУЗА', pb.x + 70, pb.y + pb.h / 2, {
+    text(ctx, 'ПАУЗА', pb.x + 94, pb.y + pb.h / 2, {
       size: 11,
       bold: true,
       color: '#16160f',
@@ -464,7 +483,7 @@ export class PairsGame {
       color: '#16160f',
       align: 'center',
     })
-    text(ctx, `цель скрыта: 7–13 бит · окно подписи ±2`, p.x + w / 2, p.y + 44, {
+    text(ctx, `цель скрыта: 15–23 бит · окно подписи ±2`, p.x + w / 2, p.y + 44, {
       size: 10,
       color: '#5c5c54',
       align: 'center',
@@ -552,18 +571,22 @@ export class PairsGame {
       const dx = (Math.random() - 0.5) * 26
       ctx.drawImage(ctx.canvas, Math.round(dx), Math.round(sy), r.w, sh, r.x, Math.round(sy), r.w, sh)
     }
-    ctx.fillStyle = 'rgba(60, 4, 2, 0.45)'
+    ctx.fillStyle = 'rgba(60, 4, 2, 0.5)'
     ctx.fillRect(r.x, r.y, r.w, r.h)
-    text(ctx, 'ПОДПИСЬ НЕ СОШЛАСЬ', r.x + r.w / 2, r.y + r.h / 2 - 16, {
-      size: 20,
+    // игра стоит: оператор извиняется перед тем, что сейчас увидит
+    const w = Math.min(360, r.w - 30)
+    const p: Rect = { x: r.x + (r.w - w) / 2, y: r.y + (r.h - 96) / 2, w, h: 96 }
+    panel(ctx, p, true, 2)
+    text(ctx, 'Мне очень жаль', p.x + w / 2, p.y + 34, {
+      size: 17,
       bold: true,
-      color: '#e8523a',
+      color: '#16160f',
       align: 'center',
     })
     if (Math.floor(now / 400) % 2 === 0) {
-      text(ctx, 'поток повреждён · на кухне кто-то проснулся', r.x + r.w / 2, r.y + r.h / 2 + 10, {
-        size: 11,
-        color: '#c9a08a',
+      text(ctx, 'подпись повреждена · она уже не одна', p.x + w / 2, p.y + 62, {
+        size: 10,
+        color: '#6a5a4a',
         align: 'center',
       })
     }

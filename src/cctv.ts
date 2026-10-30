@@ -25,6 +25,9 @@ export type GirlState = 'tied' | 'idle' | 'pace' | 'knock' | 'run' | 'toKitchen'
 export const W = 320
 export const H = 240
 
+/** Кино провала: сколько секунд маньяк идёт от проёма до девушки. */
+const WALK_S = 10
+
 /**
  * Поза: имя кости → углы поворота от позы покоя в осях комнаты:
  * X — наклон вперёд(+)/назад(-), Y — поворот влево(+)/вправо(-),
@@ -92,8 +95,11 @@ export class Cctv {
   readonly canvas: HTMLCanvasElement
   /** Она вышла через дверь кухни: конец демо. */
   onEscaped?: () => void
-  /** Маньяк добился своего: рабочий стол показывает «ВЫ ПРОИГРАЛИ». */
-  onDead?: () => void
+  /**
+   * Фазы кино провала: 'near' — за секунду до касания (рабочий стол глушит
+   * звук и показывает «Это на твоей совести»), 'touch' — он добрался.
+   */
+  onAttackPhase?: (phase: 'near' | 'touch') => void
   /** Важная реплика: рабочий стол открывает заметки и дописывает строку. */
   onNoteAppend?: (line: string) => void
 
@@ -179,9 +185,10 @@ export class Cctv {
   readonly events: string[] = []
   private exitCode = ''
   private printedCode = ''
-  /** Сцена нападения: −1 нет, 0…3.5 идёт, −2 закончилась. */
+  /** Сцена нападения: −1 нет, 0…WALK_S идёт (медленный шаг), −2 застыла. */
   private attackT = -1
-  private deadSent = false
+  /** Какие фазы кино провала уже отправлены рабочему столу. */
+  private attackPhase = { near: false, touch: false }
   /** Провал случился, пока она ещё не дошла до кухни. */
   private maniacPending = false
   private raycaster = new THREE.Raycaster()
@@ -821,8 +828,8 @@ export class Cctv {
       return
     }
 
-    // Нападение: она застыла лицом к маньяку и дрожит.
-    if (this.attackT >= 0 && this.attackT < 2.2) {
+    // Нападение: она застыла лицом к маньяку и дрожит весь его путь.
+    if (this.attackT >= 0) {
       const p: Pose = { ...STAND }
       this.add(p, 'Spine', -0.18, 0, 0)
       this.add(p, 'LeftArm', -0.45, 0, 0.55)
@@ -1240,7 +1247,13 @@ export class Cctv {
     }
   }
 
-  /** Провал головоломки: маньяк бросается из проёма. */
+  /** Провал перехвата: маньяк неспеша идёт из проёма к девушке. */
+  /** Где маньяк сейчас (инструменты проверки кино провала). */
+  debugManiac(): { x: number; z: number } | null {
+    const m = this.kitchen?.maniac
+    return m && m.visible ? { x: +m.position.x.toFixed(2), z: +m.position.z.toFixed(2) } : null
+  }
+
   maniacAttack(): void {
     if (this.attackT >= 0 || this.state === 'tied') return
     // нападение возможно только на кухне: если она ещё в пути — откладываем
@@ -1254,6 +1267,7 @@ export class Cctv {
   private startAttack(): void {
     this.task = null
     this.attackT = 0
+    this.attackPhase = { near: false, touch: false }
     this.kitchen.maniac.visible = true
     this.kitchen.maniac.position.set(0, 0, KITCHEN.z1 - 0.3)
   }
@@ -1419,39 +1433,42 @@ export class Cctv {
     this.task = null
   }
 
-  /** Сцена нападения: маньяк настигает её у кухни. */
+  /**
+   * Сцена нападения — кино, а не рывок: маньяк неспеша идёт из проёма к
+   * девушке весь WALK_S секунд, музыка нарастает на рабочем столе. За
+   * секунду до касания — фаза 'near' (тишина и плашка), в WALK_S — 'touch':
+   * сам касания не показываем, кадр застывает в моменте.
+   */
   private kitchenAttack(dt: number): void {
     if (this.attackT < 0) return
     const g = this.girl!
     this.attackT += dt
     const m = this.kitchen.maniac
     const t = this.attackT
-    // рывок из проёма к ней
-    const rush = Math.min(1, t / 1.1)
+    // неспешный шаг из проёма к ней
+    const walk = Math.min(1, t / WALK_S)
     const tx = g.position.x
     const tz = g.position.z + 0.4
-    m.position.x = 0 + (tx - 0) * rush
-    m.position.z = KITCHEN.z1 - 0.3 + (tz - (KITCHEN.z1 - 0.3)) * rush
+    m.position.x = (tx - 0) * walk
+    m.position.z = KITCHEN.z1 - 0.3 + (tz - (KITCHEN.z1 - 0.3)) * walk
     m.rotation.y = Math.atan2(tx - m.position.x, tz - m.position.z)
-    // замах всем корпусом: наклоняется и делает выпад в момент удара
-    m.rotation.x = rush < 1 ? 0.12 : 0.35 + Math.sin(t * 26) * 0.25
-    const lunge = rush >= 1 ? Math.max(0, Math.sin((t - 1.1) * 9)) * 0.22 : 0
-    m.position.x += Math.sin(m.rotation.y) * lunge
-    m.position.z += Math.cos(m.rotation.y) * lunge
-    // она разворачивается к нему и дрожит
+    // тяжёлая походка: корпус качается и притопывает
+    m.rotation.x = 0.09 + Math.sin(t * 4.6) * 0.05
+    m.position.y = Math.abs(Math.sin(t * 4.6)) * 0.035
+    // она разворачивается к нему
     this.yaw = this.yawTarget = Math.atan2(m.position.x - g.position.x, m.position.z - g.position.z)
     g.rotation.y = this.yaw
-    if (t > 2.1 && g.visible) {
-      // удар остаётся за глитчами кадра: её не видно
-      g.visible = false
+    if (!this.attackPhase.near && t >= WALK_S - 1) {
+      this.attackPhase.near = true
+      this.onAttackPhase?.('near')
     }
-    if (t > 2.4 && !this.deadSent) {
-      this.deadSent = true
-      this.onDead?.()
+    if (!this.attackPhase.touch && t >= WALK_S) {
+      this.attackPhase.touch = true
+      this.onAttackPhase?.('touch')
     }
-    if (t > 3.4) {
-      m.visible = false
-      this.attackT = -2
+    if (t >= WALK_S) {
+      // вплотную: дальше анимации нет — сцена замирает за плашками
+      this.attackT = WALK_S
     }
   }
 

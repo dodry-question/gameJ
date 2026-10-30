@@ -14,6 +14,7 @@ export class Sound {
   private modemLoading = false
   private ambient: AudioBuffer | null = null
   private ambientLoading = false
+  private ambientSrc: AudioBufferSourceNode | null = null
   private breath: AudioBuffer | null = null
   private breathLoading = false
   private breathStress: number | null = null
@@ -134,6 +135,7 @@ export class Sound {
     g.gain.linearRampToValueAtTime(0.2, t + 2.5)
     src.connect(g).connect(out)
     src.start(t)
+    this.ambientSrc = src
   }
 
   // ── синтез ───────────────────────────────────────────────────────
@@ -589,12 +591,18 @@ export class Sound {
 
   private murzik: AudioBuffer | null = null
   private murzikLoading = false
+  private murzikSrc: AudioBufferSourceNode | null = null
+  private breathMan: AudioBuffer | null = null
+  private breathManLoading = false
+  /** Кино провала добралось до тишины: фоновые планировщики больше не звучат. */
+  private deadAir = false
 
   /**
-   * «Мурзик» — музыка, включающаяся в момент нападения маньяка (провал
-   * головоломки-пар). Играет один раз, загружается лениво при первом вызове.
+   * «Мурзик» — музыка кино провала: маньяк идёт к девушке, и звук за
+   * walkMs медленно подползает от шёпота до прям оглушительного.
+   * Грузится лениво при первом вызове, играет один раз.
    */
-  playMurzik(): void {
+  playMurzikDread(walkMs: number): void {
     const ctx = this.ctx
     const out = this.master
     if (!ctx || !out) return
@@ -607,7 +615,7 @@ export class Sound {
         .then((buf) => {
           this.murzik = buf
           this.murzikLoading = false
-          this.playMurzik()
+          this.playMurzikDread(walkMs)
         })
         .catch(() => {
           this.murzikLoading = false
@@ -619,9 +627,99 @@ export class Sound {
     src.loop = false
     const g = ctx.createGain()
     const t = ctx.currentTime
-    // громче прочих звуков компьютера: это кульминация провала
-    g.gain.setValueAtTime(0.0001, t)
-    g.gain.linearRampToValueAtTime(0.85, t + 0.15)
+    // кульминация громкая нарочито: лимитер на мастере держит пик
+    g.gain.setValueAtTime(0.035, t)
+    g.gain.linearRampToValueAtTime(1.9, t + walkMs / 1000)
+    src.connect(g).connect(out)
+    src.start(t)
+    this.murzikSrc = src
+  }
+
+  // ── кино провала: тишина, выключение ПК, дыхание ─────────────────
+
+  /** За секунду до касания: полное молчание, музыка обрывается. */
+  muteAll(): void {
+    const ctx = this.ctx
+    const master = this.master
+    if (!ctx || !master) return
+    // после этого момента фоном больше ничего не живёт: только тишина,
+    // звук выключения и дыхание из темноты
+    this.deadAir = true
+    for (const src of [this.murzikSrc, this.ambientSrc]) {
+      if (src) {
+        try {
+          src.stop()
+        } catch {
+          // уже остановлен — не страшно
+        }
+      }
+    }
+    this.murzikSrc = null
+    this.ambientSrc = null
+    master.gain.cancelScheduledValues(ctx.currentTime)
+    master.gain.setTargetAtTime(0.0001, ctx.currentTime, 0.015)
+  }
+
+  /** Плавно вернуть общую громкость: перед звуком выключения ПК. */
+  unmute(): void {
+    const ctx = this.ctx
+    const master = this.master
+    if (!ctx || !master) return
+    master.gain.cancelScheduledValues(ctx.currentTime)
+    master.gain.setTargetAtTime(this.level, ctx.currentTime, 0.05)
+  }
+
+  /** Характерный звук выключения: нисходящий системный перезвон. */
+  shutdownChime(): void {
+    const seq: Array<[number, number]> = [
+      [784, 0],
+      [659, 0.18],
+      [587, 0.36],
+      [523, 0.54],
+      [392, 0.8],
+    ]
+    for (const [freq, at] of seq) this.bell(freq, 0.55, 0.05, 0.9, at)
+  }
+
+  /** Тяжёлый щелчок питания: монитор гаснет. */
+  monitorOff(): void {
+    this.tone(64, 0.3, 'sine', 0.1)
+    this.tick(2600, 3, 0.07, 0.05)
+  }
+
+  /**
+   * Нервное мужское дыхание из темноты — приближается неспеша: луп,
+   * громкость медленно ползёт вверх всю рампу rampMs. Запись: Freesound,
+   * casiba842 «Scared Male Heavy Breathing» (CC0), грузится лениво.
+   */
+  playDreadBreath(rampMs: number): void {
+    const ctx = this.ctx
+    const out = this.master
+    if (!ctx || !out) return
+    if (!this.breathMan) {
+      if (this.breathManLoading) return
+      this.breathManLoading = true
+      fetch('sounds/breath-man.mp3')
+        .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error('нет файла'))))
+        .then((b) => ctx.decodeAudioData(b))
+        .then((buf) => {
+          this.breathMan = buf
+          this.breathManLoading = false
+          this.playDreadBreath(rampMs)
+        })
+        .catch(() => {
+          this.breathManLoading = false
+        })
+      return
+    }
+    const src = ctx.createBufferSource()
+    src.buffer = this.breathMan
+    src.loop = true
+    const g = ctx.createGain()
+    const t = ctx.currentTime
+    // от еле слышного за дверью до самого уха
+    g.gain.setValueAtTime(0.02, t)
+    g.gain.linearRampToValueAtTime(1.15, t + rampMs / 1000)
     src.connect(g).connect(out)
     src.start(t)
   }
@@ -650,7 +748,9 @@ export class Sound {
   }
 
   private scheduleModem(delaySec: number): void {
+    if (this.deadAir) return
     window.setTimeout(() => {
+      if (this.deadAir) return
       this.playModem()
       this.scheduleModem(110 + Math.random() * 150)
     }, delaySec * 1000)
@@ -683,6 +783,7 @@ export class Sound {
    * камера. Стресс рулит громкостью и темпом воспроизведения. null — тишина.
    */
   setBreathing(stress: number | null): void {
+    if (this.deadAir) return
     this.breathStress = stress
     const ctx = this.ctx
     if (!ctx) return
@@ -759,7 +860,9 @@ export class Sound {
    * головы. Громкость маленькая: не раздражать, а заставлять оборачиваться.
    */
   private scheduleSteps(delaySec: number): void {
+    if (this.deadAir) return
     window.setTimeout(() => {
+      if (this.deadAir) return
       this.walkBehind()
       this.scheduleSteps(30 + Math.random() * 55)
     }, delaySec * 1000)
@@ -843,6 +946,7 @@ export class Sound {
    * Шина открывается, только пока на экране страница КАМ-04.
    */
   setCameraAudio(on: boolean): void {
+    if (this.deadAir) return
     if (this.camOn === on) return
     this.camOn = on
     const ctx = this.ctx
