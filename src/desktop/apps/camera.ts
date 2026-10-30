@@ -24,6 +24,8 @@ export class Camera implements App {
   private phase: Phase = 'locked'
   private t = 0
   private released = 0
+  private debugGirl = false
+  private debugDoor = false
   private noise: HTMLCanvasElement
 
   constructor(sound: Sound) {
@@ -64,6 +66,21 @@ export class Camera implements App {
     if (!this.cctv) return false
     this.t += 0.016
     this.cctv.update()
+
+    // Отладка: ?girl — девушку отвязывают сразу, ?door — сразу открывают дверь.
+    if (this.cctv.loaded) {
+      if (!this.debugGirl && location.search.includes('girl')) {
+        this.debugGirl = true
+        this.phase = 'untied'
+        this.cctv.untie()
+      }
+      if (!this.debugDoor && location.search.includes('door')) {
+        this.debugDoor = true
+        this.phase = 'open'
+        this.released = 0
+        this.cctv.release()
+      }
+    }
 
     if (this.phase === 'open') {
       this.released += 0.016
@@ -207,7 +224,7 @@ export class Camera implements App {
       f.h * 0.85,
     )
     g.addColorStop(0, 'rgba(0,0,0,0)')
-    g.addColorStop(1, 'rgba(0,0,0,0.55)')
+    g.addColorStop(1, 'rgba(0,0,0,0.42)')
     ctx.fillStyle = g
     ctx.fillRect(f.x, f.y, f.w, f.h)
 
