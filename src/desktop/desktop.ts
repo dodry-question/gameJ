@@ -1823,6 +1823,8 @@ export class Desktop {
 
   /** Отладка для tools/: открыть TDS сразу с живым кадром, без письма и вируса. */
   debugOpenCamera(): void {
+    // отладка = вся история уже прошла: гейты игровых узлов тоже открыты
+    this.cameraAccess = true
     const app = new Tds(this.sound)
     app.setAccess(true)
     app.onDoorRequest = () => this.openDoorNote()
