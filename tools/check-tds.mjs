@@ -53,7 +53,7 @@ await click(54, 48, 60)
 await click(54, 48, 1500)
 await shot('01-mail')
 
-// Кнопка «Скачать» в полосе вложения.
+// Кнопка «Скачать» в полосе вложения: сначала скачивание, потом вирус.
 await click(800, 539, 120)
 const virusAt = await page.evaluate(() => ({
   has: !!window.__desk?.install,
@@ -61,15 +61,17 @@ const virusAt = await page.evaluate(() => ({
     ? window.__desk.install.holdEnd - performance.now()
     : null,
 }))
-await shot('02-virus')
-await page.waitForTimeout(1200)
-await shot('03-virus-hold')
+await shot('02-download')
+await page.waitForTimeout(1600)
+await shot('03-download-late')
+await page.waitForTimeout(1800)
+await shot('04-virus')
 await page.waitForTimeout(1400)
-await shot('04-virus-fade')
-await page.waitForTimeout(1200)
-await shot('05-install')
-await page.waitForTimeout(2600)
-await shot('06-icon')
+await shot('05-virus-fade')
+await page.waitForTimeout(1500)
+await shot('06-install')
+await page.waitForTimeout(3000)
+await shot('07-icon')
 const afterInstall = await state()
 
 // ── 2. Запуск tds.exe: развёрнутая карта ─────────────────────────────

@@ -11,7 +11,7 @@ import type { Rect } from '../draw'
 import type { App } from '../app'
 import type { Sound } from '../../audio'
 import { LockGame } from './lock-game'
-import { PairsGame } from './pairs-game'
+import { PairsGame, PrintSite } from './pairs-game'
 
 type Page =
   | 'home'
@@ -24,6 +24,8 @@ type Page =
   | 'help'
   | 'lock'
   | 'pairs'
+  | 'print'
+  | 'denied'
   | 'error'
   | 'external'
   | 'notfound'
@@ -46,6 +48,7 @@ const URLS = {
   help: 'http://intranet.local/help/',
   lock: 'http://lockreset.local/',
   pairs: 'http://pairs.local/',
+  print: 'http://print.local/',
   error: 'http://192.168.0.13/gate/',
 } as const
 
@@ -102,6 +105,8 @@ export class Browser implements App {
   private game: LockGame
   /** Головоломка-пары: печать пароля и провал уходят в рабочий стол. */
   private pairs: PairsGame
+  /** print.local: строка пароля и кнопка «Печать». */
+  private printSite: PrintSite
   /** Вызывается, когда мини-игра сняла блокировку двери. */
   onUnlockDoor?: () => void
   /** Головоломка-пары проиграна: на кухне просыпается маньяк. */
@@ -110,6 +115,9 @@ export class Browser implements App {
   onPrintCode?: (code: string) => void
   /** Пароль выхода показан на сайте — дверь кухни его запомнит. */
   onPassword?: (code: string) => void
+  /** Гейты по этапам: играющие узлы отвечают только «по сюжету». */
+  canOpenLock?: () => boolean
+  canOpenPairs?: () => boolean
 
   constructor(sound: Sound) {
     this.sound = sound
@@ -117,8 +125,9 @@ export class Browser implements App {
     this.game.onWin = () => this.onUnlockDoor?.()
     this.pairs = new PairsGame(sound)
     this.pairs.onFail = () => this.onPairsFail?.()
-    this.pairs.onPrint = (code) => this.onPrintCode?.(code)
     this.pairs.onPassword = (code) => this.onPassword?.(code)
+    this.printSite = new PrintSite(sound)
+    this.printSite.onPrint = (code) => this.onPrintCode?.(code)
     ;(window as unknown as { __browser?: Browser }).__browser = this
   }
 
@@ -174,6 +183,12 @@ export class Browser implements App {
       case 'pairs':
         this.drawPairs(ctx, page)
         break
+      case 'print':
+        this.drawPrint(ctx, page)
+        break
+      case 'denied':
+        this.drawDenied(ctx, page)
+        break
       case 'external':
         this.drawExternal(ctx, page)
         break
@@ -193,7 +208,7 @@ export class Browser implements App {
     })
   }
 
-  /** Анимация загрузки страниц и тик мини-игр на страницах замка и пар. */
+  /** Анимация загрузки страниц и тик мини-игр на игровых страницах. */
   tick(): boolean {
     if (this.loading > 0) {
       this.t += 0.016
@@ -234,6 +249,8 @@ export class Browser implements App {
     if (page === 'external') return 'внешняя сеть'
     if (page === 'lock') return 'панель сброса замка'
     if (page === 'pairs') return 'архив памяти'
+    if (page === 'print') return 'служба печати'
+    if (page === 'denied') return 'доступ запрещён'
     return 'готово'
   }
 
@@ -252,11 +269,15 @@ export class Browser implements App {
   private route(url: string): Page {
     const low = url.toLowerCase()
     if (low === 'about:help') return 'help'
+    // игровые узлы отвечают только «по сюжету»: раньше времени — отказ
     if (low.startsWith('http://lockreset.local') || low.startsWith('https://lockreset.local')) {
-      return 'lock'
+      return this.canOpenLock?.() ? 'lock' : 'denied'
     }
     if (low.startsWith('http://pairs.local') || low.startsWith('https://pairs.local')) {
-      return 'pairs'
+      return this.canOpenPairs?.() ? 'pairs' : 'denied'
+    }
+    if (low.startsWith('http://print.local') || low.startsWith('https://print.local')) {
+      return this.canOpenPairs?.() ? 'print' : 'denied'
     }
     if (low.startsWith('http://intranet.local') || low.startsWith('https://intranet.local')) {
       const path = low.replace(/^https?:\/\/intranet\.local/, '').split(/[?#]/)[0]
@@ -348,6 +369,7 @@ export class Browser implements App {
     if (!this.focus) {
       if (this.page === 'lock') return this.game.key(e)
       if (this.page === 'pairs') return this.pairs.key(e)
+      if (this.page === 'print') return this.printSite.key(e)
     }
     if (!this.focus) return false
     const value = this.editValue
@@ -1255,6 +1277,67 @@ export class Browser implements App {
     this.pairs.draw(ctx, { x: p.x, y: p.y + head, w: p.w, h: p.h - head })
   }
 
+  /** Страница print.local: строка пароля и кнопка «Печать». */
+  private drawPrint(ctx: CanvasRenderingContext2D, p: Rect): void {
+    fill(ctx, p, '#08110c')
+    const head = 26
+    fill(ctx, { x: p.x, y: p.y, w: p.w, h: head }, '#08140c')
+    ctx.strokeStyle = 'rgba(126, 154, 132, 0.35)'
+    ctx.beginPath()
+    ctx.moveTo(p.x, p.y + head - 0.5)
+    ctx.lineTo(p.x + p.w, p.y + head - 0.5)
+    ctx.stroke()
+    setFont(ctx, 11, true)
+    ctx.fillStyle = '#9fd39f'
+    ctx.textBaseline = 'middle'
+    ctx.fillText('СЛУЖЕБНАЯ ПЕЧАТЬ · print.local', p.x + 12, p.y + head / 2 + 1)
+    if (this.loading > 0) {
+      text(ctx, 'соединение…', p.x + p.w / 2, p.y + head + (p.h - head) / 2, {
+        size: 12,
+        color: '#5f6f62',
+        align: 'center',
+      })
+      return
+    }
+    this.printSite.draw(ctx, { x: p.x, y: p.y + head, w: p.w, h: p.h - head })
+  }
+
+  /** Ранний заход на игровой узел: тот отвечает только «по сюжету». */
+  private drawDenied(ctx: CanvasRenderingContext2D, p: Rect): void {
+    const x = p.x + 20
+    let y = p.y + 32
+
+    this.serif(ctx, 20, true)
+    ctx.fillStyle = '#8a1c1c'
+    ctx.fillText('403 · ДОСТУП ЗАПРЕЩЁН', x, y)
+    y += 24
+    this.rule(ctx, x, y, p.w - 40)
+    y += 24
+
+    this.serif(ctx, 13)
+    ctx.fillStyle = '#23231c'
+    ctx.fillText('Узел отвечает только с терминала охраны блока C.', x, y)
+    y += 18
+    this.serif(ctx, 11)
+    ctx.fillStyle = '#5c5c54'
+    for (const line of wrap(
+      ctx,
+      'Пока вы не на связи с нужной камерой, служебные страницы не открываются. Продолжайте смену — адрес понадобится позже.',
+      p.w - 60,
+      11,
+    )) {
+      ctx.fillText(line, x, y)
+      y += 15
+    }
+
+    y += 10
+    this.serif(ctx, 11)
+    ctx.fillStyle = '#2f6b2f'
+    ctx.fillText(this.url, x, y)
+    y += 26
+    this.link(ctx, '← На главную', x, y, () => this.go('home'))
+  }
+
   private drawHelp(ctx: CanvasRenderingContext2D, p: Rect): void {
     const x = p.x + 20
     let y = p.y + 26
@@ -1395,6 +1478,7 @@ export class Browser implements App {
     this.selectAll = false
     if (this.page === 'lock' && this.game.click(x, y)) return
     if (this.page === 'pairs' && this.pairs.click(x, y)) return
+    if (this.page === 'print' && this.printSite.click(x, y)) return
     for (let i = this.hits.length - 1; i >= 0; i--) {
       if (inside(this.hits[i].r, x, y)) {
         this.hits[i].fn()

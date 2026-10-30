@@ -8,6 +8,7 @@
 import { fill, panel, setFont } from '../draw'
 import type { Rect } from '../draw'
 import { getCctv } from '../../cctv'
+import { KITCHEN } from '../../cctv-kitchen'
 
 export type Cam = {
   id: string
@@ -32,6 +33,9 @@ const ROOM4 = { fx: 0.3, fy: 0.3, fw: 0.28, fh: 0.48 }
 /** Мировые границы пола комнаты 4. */
 const WORLD = { x0: -3, x1: 3, z0: -3, z1: 2 }
 
+/** Кухня (комната 5): блок на плане и мировые границы пола. */
+const ROOM5 = { fx: 0.58, fy: 0.3, fw: 0.24, fh: 0.26 }
+
 const WALL = '#7e9a84'
 const INK = '#0b0f0c'
 
@@ -53,7 +57,9 @@ export class TdsMap {
       return false
     }
     const pos = cctv.girlPos
-    if (pos && cctv.sees(pos.x, pos.z)) {
+    // в кухне её показывает КАМ-05: метка живёт, пока камера 05 смотрит
+    const inKitchen = pos !== null && pos.z < KITCHEN.z1
+    if (pos && (cctv.sees(pos.x, pos.z) || (inKitchen && cctv.viewNow === '05'))) {
       this.lastSeen = pos
       if (this.alpha < 1) this.alpha = Math.min(1, this.alpha + 0.25)
       return true
@@ -98,12 +104,18 @@ export class TdsMap {
       w: ROOM4.fw * b.w,
       h: ROOM4.fh * b.h,
     }
+    const room5 = {
+      x: b.x + ROOM5.fx * b.w,
+      y: b.y + ROOM5.fy * b.h,
+      w: ROOM5.fw * b.w,
+      h: ROOM5.fh * b.h,
+    }
 
     // ── комнаты ─────────────────────────────────────────────────────
     this.room(ctx, b, 'КОРИДОР', 0, 0.08, 1, 0.3, '#101610')
     this.room(ctx, b, 'ХОЛЛ', 0, 0.3, 0.3, 0.86, '#131a14')
     this.room(ctx, b, 'КОМНАТА 4', ROOM4.fx, ROOM4.fy, ROOM4.fx + ROOM4.fw, ROOM4.fy + ROOM4.fh, '#18211a')
-    this.room(ctx, b, 'КОМНАТА 5', 0.58, 0.3, 0.82, 0.56, '#131a14')
+    this.room(ctx, b, 'КОМНАТА 5 · КУХНЯ', 0.58, 0.3, 0.82, 0.56, '#131a14')
     this.room(ctx, b, 'ЛЕСТНИЦА', 0.82, 0.3, 1, 0.56, '#111711')
     this.room(ctx, b, 'СКЛАД', 0.3, 0.78, 0.82, 1, '#121812')
     this.room(ctx, b, 'ЩИТОВАЯ', 0.82, 0.56, 1, 1, '#101510')
@@ -128,6 +140,15 @@ export class TdsMap {
     ctx.arc(doorL, room4.y, doorR - doorL, 0, Math.PI / 2)
     ctx.stroke()
 
+    // дверь в кухню: проём в верхней стене комнаты 5 — вход из коридора
+    const door5L = room5.x + 0.34 * room5.w
+    const door5R = room5.x + 0.66 * room5.w
+    fill(ctx, { x: door5L, y: room5.y - 2, w: door5R - door5L, h: 4 }, INK)
+    ctx.strokeStyle = '#c9c2a0'
+    ctx.beginPath()
+    ctx.arc(door5L, room5.y, door5R - door5L, 0, Math.PI / 2)
+    ctx.stroke()
+
     // стул
     const chair = this.worldToMap(-0.6, -0.9, room4)
     ctx.strokeStyle = '#a08c5c'
@@ -150,8 +171,30 @@ export class TdsMap {
     ctx.closePath()
     ctx.fill()
 
+    // ── сектор камеры 05 (кухня): узел стоит там, где камера ─────────
+    if (cctv.kitchenReady) {
+      const c5 = cctv.cam05
+      const p5 = this.worldToMap5(c5.pos[0], c5.pos[2], room5)
+      const a5 = this.worldToMap5(c5.at[0], c5.at[2], room5)
+      const ang5 = Math.atan2(a5.y - p5.y, a5.x - p5.x)
+      const half5 = ((c5.fov / 2) * Math.PI) / 180
+      const len5 = Math.max(46, room5.w * 1.3)
+      ctx.fillStyle = 'rgba(140, 220, 150, 0.1)'
+      ctx.beginPath()
+      ctx.moveTo(p5.x, p5.y)
+      ctx.lineTo(p5.x + Math.cos(ang5 - half5) * len5, p5.y + Math.sin(ang5 - half5) * len5)
+      ctx.lineTo(p5.x + Math.cos(ang5) * len5, p5.y + Math.sin(ang5) * len5)
+      ctx.lineTo(p5.x + Math.cos(ang5 + half5) * len5, p5.y + Math.sin(ang5 + half5) * len5)
+      ctx.closePath()
+      ctx.fill()
+    }
+
     if (this.lastSeen && this.alpha > 0) {
-      const gp = this.worldToMap(this.lastSeen.x, this.lastSeen.z, room4)
+      // метка ложится в ту комнату, где её видели
+      const gp =
+        this.lastSeen.z < KITCHEN.z1
+          ? this.worldToMap5(this.lastSeen.x, this.lastSeen.z, room5)
+          : this.worldToMap(this.lastSeen.x, this.lastSeen.z, room4)
       ctx.globalAlpha = this.alpha
       ctx.fillStyle = '#d4402e'
       ctx.beginPath()
@@ -174,6 +217,12 @@ export class TdsMap {
       if (cam.id === '04') {
         cx = cp.x
         cy = cp.y
+      } else if (cam.id === '05' && cctv.kitchenReady) {
+        // узел 05 стоит там, где висит камера кухни — как узел 04
+        const c5 = cctv.cam05
+        const p5 = this.worldToMap5(c5.pos[0], c5.pos[2], room5)
+        cx = p5.x
+        cy = p5.y
       } else {
         cx = b.x + cam.fx * b.w
         cy = b.y + cam.fy * b.h
@@ -315,6 +364,14 @@ export class TdsMap {
     return {
       x: room.x + ((x - WORLD.x0) / (WORLD.x1 - WORLD.x0)) * room.w,
       y: room.y + ((z - WORLD.z0) / (WORLD.z1 - WORLD.z0)) * room.h,
+    }
+  }
+
+  /** Мировые координаты кухни → пиксели плана: вход из коридора сверху. */
+  private worldToMap5(x: number, z: number, room: Rect): { x: number; y: number } {
+    return {
+      x: room.x + ((x - KITCHEN.x0) / (KITCHEN.x1 - KITCHEN.x0)) * room.w,
+      y: room.y + ((-z - 9.2) / 3.6) * room.h,
     }
   }
 }

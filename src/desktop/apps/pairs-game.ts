@@ -1,17 +1,15 @@
 /**
- * «pairs.local» — головоломка-пары на память, второй домен в браузере.
+ * «pairs.local» — головоломка-пары на память и сайт печати пароля.
  *
- * Два этапа: сетка 9×9 с восемью парами, затем 12×12 с двенадцатью. Карты
- * открываются на несколько секунд — запомни, где что лежит, потом перевери
- * всё по памяти. На каждый этап даётся 8 попыток; промах = открытая
- * несовпавшая пара. Попытки кончились — связь обрывается: в кухне в этот
- * момент начинается худшее (сцену провала двигает рабочий стол).
+ * Игра: два этапа — сетка 9×9 с восемью парами, затем 12×12 с двенадцатью.
+ * Карты открываются на несколько секунд — запомни, где что лежит, потом
+ * перевери по памяти. На каждый этап 8 попыток (промах = несовпавшая пара)
+ * и 3 подсматривания. Попытки кончились — связь обрывается, в кухне
+ * начинается худшее. Победа показывает код выхода — печатается он на
+ * отдельном узле print.local (класс PrintSite ниже): строка с паролем,
+ * кнопка «Печать», бумажку вынесет принтер на кухне.
  *
- * После обоих этапов сайт показывает пароль выхода: его вписывают в строку
- * и отправляют на печать — бумажку вынесет принтер на кухне. Сайт пароль не
- * проверяет: проверяет дверь. Неверный пароль печатается так же честно.
- *
- * Игра не знает ни про браузер, ни про кухню: наружу только onFail/onPrint.
+ * Ничего не знают ни про браузер, ни про кухню: наружу только колбэки.
  */
 import { fill, inside, panel, setFont, text } from '../draw'
 import type { Rect } from '../draw'
@@ -25,7 +23,9 @@ const STAGES: Stage[] = [
   { cols: 12, rows: 12, pairs: 12, showMs: 8000 },
 ]
 const ATTEMPTS = 8 // на каждый этап
+const PEEKS = 3 // подсматриваний на каждый этап
 const MISS_MS = 700 // сколько висит несовпавшая пара
+const PEEK_MS = 900 // сколько открыты карты при подсматривании
 const DONE_MS = 1400
 
 /** Лица карт: процедурные значки игры. На этап берётся случайная выборка. */
@@ -50,9 +50,7 @@ type State = 'intro' | 'memorize' | 'play' | 'stageDone' | 'won' | 'failed'
 export class PairsGame {
   /** Попытки кончились: рабочий стол запускает сцену провала. */
   onFail?: () => void
-  /** Нажата «Печать»: код уходит на принтер в кухне (любой, хоть неверный). */
-  onPrint?: (code: string) => void
-  /** Оба этапа пройдены: пароль выхода показан — дверь кухни его ждёт. */
+  /** Оба этапа пройдены: код выхода показан — дверь кухни его запомнит. */
   onPassword?: (code: string) => void
 
   private sound: Sound
@@ -61,18 +59,16 @@ export class PairsGame {
   private cards: Card[] = []
   private kinds: string[] = []
   private attempts = ATTEMPTS
+  private peeks = PEEKS
+  private peekUntil = 0
   private openIdx: number[] = []
   private missAt = 0
   private missPair: number[] = []
   private phaseAt = 0
   private password = ''
-  private printed = false
   private failSent = false
-  private inputFocus = false
-  private input = ''
   private startBtn: Rect | null = null
-  private inputRect: Rect | null = null
-  private printBtn: Rect | null = null
+  private peekBtn: Rect | null = null
   /** Геометрия последнего кадра — для кликов и отладки. */
   private geo: { ox: number; oy: number; cell: number } = { ox: 0, oy: 0, cell: 24 }
 
@@ -80,23 +76,19 @@ export class PairsGame {
     this.sound = sound
     this.buildStage(0)
     ;(window as unknown as { __pairs?: PairsGame }).__pairs = this
-    window.addEventListener('blur', () => {
-      this.inputFocus = false
-    })
   }
 
-  // ── отладка для tools/ ───────────────────────────────────────────
+  // ── состояние для tools/ ─────────────────────────────────────────
 
   debugState(): object {
     return {
       state: this.state,
       stage: this.stage + 1,
       attempts: this.attempts,
+      peeks: this.peeks,
       matched: this.cards.filter((c) => c.state === 'matched').length / 2,
       pairs: this.cards.length / 2,
       password: this.password || null,
-      printed: this.printed,
-      input: this.input,
     }
   }
 
@@ -115,10 +107,6 @@ export class PairsGame {
     this.finishStage()
   }
 
-  debugPrint(code: string): void {
-    this.onPrint?.(code)
-  }
-
   /** Карты с пиксельными центрами — инструменты проверки кликают по ним. */
   debugCards(): Array<{ kind: string; state: string; x: number; y: number }> {
     const { ox, oy, cell } = this.geo
@@ -131,23 +119,11 @@ export class PairsGame {
     }))
   }
 
-  /** Строка ввода и кнопка «Печать» на экране пароля — для кликов из tools/. */
-  debugForm(): { input: { x: number; y: number }; print: { x: number; y: number } } | null {
-    if (!this.inputRect || !this.printBtn) return null
-    return {
-      input: { x: this.inputRect.x + this.inputRect.w / 2, y: this.inputRect.y + this.inputRect.h / 2 },
-      print: { x: this.printBtn.x + this.printBtn.w / 2, y: this.printBtn.y + this.printBtn.h / 2 },
-    }
-  }
-
   /** Рабочий стол перезапустил смену — сайт встаёт на начало. */
   reset(): void {
     this.stage = 0
     this.password = ''
-    this.printed = false
     this.failSent = false
-    this.input = ''
-    this.inputFocus = false
     this.buildStage(0)
   }
 
@@ -157,8 +133,10 @@ export class PairsGame {
     const s = STAGES[index]
     this.stage = index
     this.attempts = ATTEMPTS
+    this.peeks = PEEKS
     this.openIdx = []
     this.missPair = []
+    this.peekUntil = 0
     this.state = 'intro'
     this.phaseAt = 0
 
@@ -208,6 +186,11 @@ export class PairsGame {
       this.openIdx = []
       return true
     }
+    // подсматривание кончилось — карты снова закрыты
+    if (this.peekUntil > 0 && now >= this.peekUntil) {
+      this.peekUntil = 0
+      return true
+    }
     if (this.state === 'stageDone' && now - this.phaseAt >= DONE_MS) {
       if (this.stage + 1 < STAGES.length) {
         this.buildStage(this.stage + 1)
@@ -217,7 +200,6 @@ export class PairsGame {
           this.password = String(1000 + Math.floor(Math.random() * 9000))
           this.onPassword?.(this.password)
         }
-        this.printed = false
         this.sound.message()
       }
       return true
@@ -235,22 +217,27 @@ export class PairsGame {
       }
       return false
     }
-    if (this.state === 'won' && this.inputFocus) {
-      if (e.key === 'Escape') {
-        this.inputFocus = false
-        return true
-      }
-      if (e.key === 'Backspace') {
-        this.input = this.input.slice(0, -1)
-        return true
-      }
-      if (/^[0-9]$/.test(e.key) && this.input.length < 6) {
-        this.input += e.key
-        this.sound.step()
-        return true
-      }
+    // P — подсмотреть, чтобы и с клавиатуры было удобно
+    if ((e.code === 'KeyP' || e.code === 'KeyЗ') && !e.repeat && this.canPeek()) {
+      this.doPeek()
+      return true
     }
     return false
+  }
+
+  private canPeek(): boolean {
+    return (
+      this.state === 'play' &&
+      this.peeks > 0 &&
+      this.peekUntil === 0 &&
+      this.missPair.length === 0
+    )
+  }
+
+  private doPeek(): void {
+    this.peeks--
+    this.peekUntil = performance.now() + PEEK_MS
+    this.sound.message()
   }
 
   click(x: number, y: number): boolean {
@@ -261,25 +248,13 @@ export class PairsGame {
       this.sound.click()
       return true
     }
-    if (this.state === 'won') {
-      if (this.inputRect && inside(this.inputRect, x, y)) {
-        this.inputFocus = true
-        this.sound.click()
-        return true
-      }
-      if (this.printBtn && inside(this.printBtn, x, y) && this.input.length > 0) {
-        this.printed = true
-        this.sound.busy()
-        this.onPrint?.(this.input)
-        return true
-      }
-      if (this.inputFocus && this.inputRect && !inside(this.inputRect, x, y)) {
-        this.inputFocus = false
-      }
-      return false
+    if (this.state === 'play' && this.peekBtn && inside(this.peekBtn, x, y)) {
+      if (this.canPeek()) this.doPeek()
+      else this.sound.deny()
+      return true
     }
     if (this.state !== 'play') return false
-    if (this.missPair.length > 0) return false // ждём, пока пара закроется
+    if (this.missPair.length > 0 || this.peekUntil > 0) return false // ждём
 
     const { ox, oy, cell } = this.geo
     const col = Math.floor((x - ox) / cell)
@@ -341,7 +316,12 @@ export class PairsGame {
 
     const hud = 26
     const pad = 12
-    const gridArea: Rect = { x: r.x + pad, y: r.y + hud + 6, w: r.w - pad * 2, h: r.h - hud * 2 - 16 }
+    const gridArea: Rect = {
+      x: r.x + pad,
+      y: r.y + hud + 6,
+      w: r.w - pad * 2,
+      h: r.h - hud * 2 - 16,
+    }
     const { cols, rows } = this.cfg
     const cell = Math.max(8, Math.floor(Math.min(gridArea.w / cols, gridArea.h / rows)) - 2)
     const ox = gridArea.x + (gridArea.w - cell * cols) / 2
@@ -350,7 +330,7 @@ export class PairsGame {
 
     this.drawHud(ctx, r, hud, now)
     if (this.state === 'won') {
-      this.drawPassword(ctx, r, now)
+      this.drawWon(ctx, r)
       return
     }
 
@@ -385,6 +365,22 @@ export class PairsGame {
       })
     }
 
+    // кнопка подсматривания
+    if (this.state === 'play') {
+      const btn: Rect = { x: r.x + r.w - 132, y: r.y + r.h - 30, w: 120, h: 22 }
+      const can = this.canPeek()
+      panel(ctx, btn, can, 1)
+      text(ctx, `ПОДСМОТРЕТЬ · ${this.peeks}`, btn.x + btn.w / 2, btn.y + btn.h / 2, {
+        size: 10,
+        bold: true,
+        color: can ? '#16160f' : '#8e8e86',
+        align: 'center',
+      })
+      this.peekBtn = btn
+    } else {
+      this.peekBtn = null
+    }
+
     if (this.state === 'intro') this.drawIntro(ctx, r)
     if (this.state === 'stageDone') {
       text(ctx, 'ЭТАП ПРОЙДЕН', r.x + r.w / 2, r.y + r.h / 2 - 8, {
@@ -408,8 +404,9 @@ export class PairsGame {
   ): void {
     const inset = Math.max(2, Math.floor(cell / 10))
     const r: Rect = { x: x + inset, y: y + inset, w: cell - inset * 2, h: cell - inset * 2 }
-    // в фазе показа карты лежат лицом вверх, хотя формально ещё «закрыты»
-    const faceUp = card.state !== 'hidden' || this.state === 'memorize'
+    // в фазе показа и при подсматривании карты лежат лицом вверх
+    const faceUp =
+      card.state !== 'hidden' || this.state === 'memorize' || performance.now() < this.peekUntil
     if (!faceUp) {
       // рубашка: светлая фаска Win2000 с тыквенным водяным знаком
       panel(ctx, r, true, 1)
@@ -456,7 +453,7 @@ export class PairsGame {
     ctx.fillStyle = 'rgba(4, 10, 6, 0.85)'
     ctx.fillRect(r.x, r.y, r.w, r.h)
     const w = Math.min(400, r.w - 30)
-    const h = 172
+    const h = 190
     const p: Rect = { x: r.x + (r.w - w) / 2, y: r.y + Math.max(10, (r.h - h) / 2 - 8), w, h }
     panel(ctx, p, true, 2)
     text(ctx, `ЭТАП ${this.stage + 1} ИЗ 2`, p.x + w / 2, p.y + 22, {
@@ -475,15 +472,16 @@ export class PairsGame {
     const lines = [
       'карты откроются на несколько секунд —',
       'запомни, где какая, потом найди все пары.',
-      'промах сжигает попытку. попыток нет —',
-      'связь обрывается, и на кухне кто-то просыпается.',
+      'промах сжигает попытку, подсмотреть можно 3 раза (P).',
+      'попыток нет — связь обрывается, и на кухне',
+      'кто-то просыпается.',
     ]
     let y = p.y + 66
     for (const line of lines) {
       text(ctx, line, p.x + w / 2, y, { size: 10, color: '#5c5c54', align: 'center' })
       y += 14
     }
-    const btn: Rect = { x: p.x + w / 2 - 88, y: p.y + p.h - 32, w: 176, h: 22 }
+    const btn: Rect = { x: p.x + w / 2 - 88, y: p.y + p.h - 30, w: 176, h: 22 }
     panel(ctx, btn, true, 1)
     text(ctx, 'ПРОБЕЛ — ОТКРЫТЬ КАРТЫ', btn.x + btn.w / 2, btn.y + btn.h / 2, {
       size: 10,
@@ -491,6 +489,42 @@ export class PairsGame {
       align: 'center',
     })
     this.startBtn = btn
+  }
+
+  private drawWon(ctx: CanvasRenderingContext2D, r: Rect): void {
+    ctx.fillStyle = 'rgba(4, 10, 6, 0.85)'
+    ctx.fillRect(r.x, r.y, r.w, r.h)
+    const w = Math.min(380, r.w - 30)
+    const h = 170
+    const p: Rect = { x: r.x + (r.w - w) / 2, y: r.y + Math.max(10, (r.h - h) / 2 - 8), w, h }
+    panel(ctx, p, true, 2)
+    text(ctx, 'АРХИВ ВЗЛОМАН', p.x + w / 2, p.y + 24, {
+      size: 14,
+      bold: true,
+      color: '#16160f',
+      align: 'center',
+    })
+    text(ctx, 'код выхода из блока', p.x + w / 2, p.y + 44, {
+      size: 10,
+      color: '#5c5c54',
+      align: 'center',
+    })
+    setFont(ctx, 26, true)
+    ctx.fillStyle = '#16160f'
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillText(this.password, p.x + w / 2, p.y + 74)
+    ctx.textAlign = 'left'
+    const lines = [
+      'открой print.local, впиши код в строку',
+      'и нажми «Печать» — бумажка выйдет',
+      'из принтера на кухне.',
+    ]
+    let y = p.y + 100
+    for (const line of lines) {
+      text(ctx, line, p.x + w / 2, y, { size: 10, color: '#5c5c54', align: 'center' })
+      y += 14
+    }
   }
 
   private drawFail(ctx: CanvasRenderingContext2D, r: Rect, now: number): void {
@@ -517,63 +551,140 @@ export class PairsGame {
       })
     }
   }
+}
 
-  private drawPassword(ctx: CanvasRenderingContext2D, r: Rect, now: number): void {
+/**
+ * «print.local» — служебная печать: единственное, что умеет этот узел, —
+ * принять пароль в строку и отправить бумажку на принтер кухни. Пароль он
+ * не проверяет: проверяет дверь.
+ */
+export class PrintSite {
+  /** Нажата «Печать»: код уходит на принтер в кухне (любой, хоть неверный). */
+  onPrint?: (code: string) => void
+
+  private sound: Sound
+  private input = ''
+  private focus = false
+  private printed = false
+  private inputRect: Rect | null = null
+  private printBtn: Rect | null = null
+
+  constructor(sound: Sound) {
+    this.sound = sound
+    ;(window as unknown as { __printsite?: PrintSite }).__printsite = this
+    window.addEventListener('blur', () => {
+      this.focus = false
+    })
+  }
+
+  debugState(): object {
+    return { input: this.input, printed: this.printed }
+  }
+
+  /** Строка и кнопка — для кликов из tools/. */
+  debugForm(): { input: { x: number; y: number }; print: { x: number; y: number } } | null {
+    if (!this.inputRect || !this.printBtn) return null
+    return {
+      input: {
+        x: this.inputRect.x + this.inputRect.w / 2,
+        y: this.inputRect.y + this.inputRect.h / 2,
+      },
+      print: {
+        x: this.printBtn.x + this.printBtn.w / 2,
+        y: this.printBtn.y + this.printBtn.h / 2,
+      },
+    }
+  }
+
+  tick(): boolean {
+    return false
+  }
+
+  key(e: KeyboardEvent): boolean {
+    if (!this.focus) return false
+    if (e.key === 'Escape') {
+      this.focus = false
+      return true
+    }
+    if (e.key === 'Backspace') {
+      this.input = this.input.slice(0, -1)
+      return true
+    }
+    if (/^[0-9]$/.test(e.key) && this.input.length < 6) {
+      this.input += e.key
+      this.sound.step()
+      return true
+    }
+    return false
+  }
+
+  click(x: number, y: number): boolean {
+    if (this.inputRect && inside(this.inputRect, x, y)) {
+      this.focus = true
+      this.sound.click()
+      return true
+    }
+    if (this.printBtn && inside(this.printBtn, x, y) && this.input.length > 0) {
+      this.printed = true
+      this.sound.busy()
+      this.onPrint?.(this.input)
+      return true
+    }
+    this.focus = false
+    return false
+  }
+
+  draw(ctx: CanvasRenderingContext2D, r: Rect): void {
+    fill(ctx, r, '#08110c')
     const w = Math.min(430, r.w - 30)
-    const h = 236
-    const p: Rect = { x: r.x + (r.w - w) / 2, y: r.y + Math.max(10, (r.h - h) / 2 - 8), w, h }
+    const h = 250
+    const p: Rect = { x: r.x + (r.w - w) / 2, y: r.y + Math.max(14, (r.h - h) / 2 - 10), w, h }
     panel(ctx, p, true, 2)
-    text(ctx, 'ДОСТУП ПОЛУЧЕН', p.x + w / 2, p.y + 22, {
+
+    text(ctx, 'СЛУЖЕБНАЯ ПЕЧАТЬ', p.x + w / 2, p.y + 24, {
       size: 14,
       bold: true,
       color: '#16160f',
       align: 'center',
     })
-    text(ctx, 'пароль выхода из блока', p.x + w / 2, p.y + 42, {
+    text(ctx, 'узел print.local · кухня блока C', p.x + w / 2, p.y + 44, {
       size: 10,
       color: '#5c5c54',
       align: 'center',
     })
-
-    // пароль крупно
-    setFont(ctx, 26, true)
-    ctx.fillStyle = '#16160f'
-    ctx.textAlign = 'center'
-    ctx.textBaseline = 'middle'
-    ctx.fillText(this.password, p.x + w / 2, p.y + 74)
-    ctx.textAlign = 'left'
-
     const lines = [
-      'впишите пароль в строку и нажмите «Печать» —',
-      'бумажку вынесет принтер на кухне.',
-      'ошибётесь — она дойдёт до двери и дверь откажет.',
+      'Это поле для ввода пароля выхода.',
+      'Впишите код — принтер на кухне выведет бумажку,',
+      'и девушка отнесёт её к двери.',
     ]
-    let y = p.y + 98
+    let y = p.y + 70
     for (const line of lines) {
-      text(ctx, line, p.x + w / 2, y, { size: 10, color: '#5c5c54', align: 'center' })
-      y += 14
+      text(ctx, line, p.x + w / 2, y, { size: 11, color: '#23231c', align: 'center' })
+      y += 16
     }
 
-    // строка ввода
-    const field: Rect = { x: p.x + w / 2 - 90, y: y + 4, w: 180, h: 26 }
+    const field: Rect = { x: p.x + w / 2 - 90, y: y + 6, w: 180, h: 28 }
     fill(ctx, field, '#ffffff')
-    ctx.strokeStyle = this.inputFocus ? '#2c4f86' : '#4a4a44'
+    ctx.strokeStyle = this.focus ? '#2c4f86' : '#4a4a44'
     ctx.strokeRect(field.x + 0.5, field.y + 0.5, field.w - 1, field.h - 1)
     setFont(ctx, 13, true)
     ctx.fillStyle = '#23231c'
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
-    const shown = this.input || '· · · ·'
-    ctx.fillText(shown, field.x + field.w / 2, field.y + field.h / 2)
-    if (this.inputFocus && Math.floor(now / 500) % 2 === 0) {
+    ctx.fillText(this.input || '· · · ·', field.x + field.w / 2, field.y + field.h / 2)
+    if (this.focus && Math.floor(performance.now() / 500) % 2 === 0) {
       ctx.fillStyle = '#111111'
-      ctx.fillRect(field.x + field.w / 2 + (this.input ? 14 : -16), field.y + 5, 1, field.h - 10)
+      ctx.fillRect(
+        field.x + field.w / 2 + (this.input ? 14 : -16),
+        field.y + 5,
+        1,
+        field.h - 10,
+      )
     }
     ctx.textAlign = 'left'
     this.inputRect = field
 
-    // кнопка печати
-    const btn: Rect = { x: p.x + w / 2 - 70, y: field.y + field.h + 10, w: 140, h: 26 }
+    const btn: Rect = { x: p.x + w / 2 - 70, y: field.y + field.h + 12, w: 140, h: 26 }
     panel(ctx, btn, this.input.length > 0, 1)
     text(ctx, 'ПЕЧАТЬ', btn.x + btn.w / 2, btn.y + btn.h / 2, {
       size: 11,
@@ -585,10 +696,10 @@ export class PairsGame {
 
     text(
       ctx,
-      this.printed ? 'отправлено на печать · следите за кухней' : '',
+      this.printed ? 'отправлено на печать · следите за кухней' : 'печать доступна только с этого узла',
       p.x + w / 2,
       p.y + p.h - 12,
-      { size: 10, color: '#2f6b2f', align: 'center' },
+      { size: 10, color: this.printed ? '#2f6b2f' : '#5c5c54', align: 'center' },
     )
   }
 }

@@ -1,13 +1,13 @@
-// Проверка головоломки-пар на pairs.local: открытие страницы → запуск этапа →
-// показ → поиск пар (совпадение и промах с попытками) → победа → пароль →
-// печать кода → провал при исчерпанных попытках.
+// Проверка головоломки-пар и узла печати: гейт до этапа (403) → pairs.local →
+// два этапа (8 попыток, 3 подсматривания) → код без формы печати → print.local
+// → строка пароля → «Печать» → код уходит на принтер кухни.
 //   node tools/check-pairs.mjs [url] [outDir]
 import { chromium } from 'playwright-core'
 import { mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-const url = process.argv[2] ?? 'http://127.0.0.1:5175/?ui'
+const url = process.argv[2] ?? 'http://127.0.0.1:5175/?ui&cam&kitchen'
 const out = process.argv[3] ?? join(tmpdir(), 'opencode', 'pairs')
 mkdirSync(out, { recursive: true })
 
@@ -38,29 +38,40 @@ const shot = async (name) => {
   })
 }
 const pairs = () => page.evaluate(() => window.__pairs?.debugState() ?? null)
+const navigate = async (host) => {
+  await click(400, 143, 200)
+  await page.keyboard.type(host, { delay: 15 })
+  await page.keyboard.press('Enter')
+  await page.waitForTimeout(1200)
+  return page.evaluate(() => window.__browser?.page ?? null)
+}
 
 const result = {}
 
-// ── 1. Пуск → Netscape → pairs.local ─────────────────────────────────
+// ── 1. Гейт замка: до письма со камеры узел закрыт ───────────────────
+await page.waitForFunction(() => window.__cctv?.loaded === true, null, { timeout: 20000 })
 await click(38, 704, 300)
 await click(110, 522, 1500)
-await click(400, 143, 200)
-await page.keyboard.type('pairs.local', { delay: 15 })
-await page.keyboard.press('Enter')
-await page.waitForTimeout(1300)
-result.page = await page.evaluate(() => window.__browser?.page ?? null)
-result.intro = await pairs()
-await shot('01-intro')
+result.gateLockDeniedEarly =
+  (await page.evaluate(() => window.__browser?.canOpenLock?.() ?? null)) === false
 
-// ── 2. Этап 1: показ → честные клики: пара и промах → добить отладкой ─
+// ── 2. Она на кухне — pairs.local открывается ────────────────────────
+await page.waitForFunction(
+  () => window.__cctv?.girlState === 'kitchen',
+  null,
+  { timeout: 30000 },
+)
+result.page = await navigate('pairs.local')
+result.intro = await pairs()
+await shot('02-intro')
 await page.keyboard.press('Space')
-await page.waitForTimeout(400)
+await page.waitForTimeout(300)
 result.memorize = await pairs()
-await shot('02-memorize')
+await shot('03-memorize')
 await page.evaluate(() => window.__pairs.debugSkipMemorize())
 await page.waitForTimeout(200)
 
-// честный промах: две разные карты — попытка должна сгореть
+// честный промах и честное совпадение
 const missPair = await page.evaluate(() => {
   const cards = window.__pairs.debugCards()
   const a = cards.find((c) => c.state === 'hidden')
@@ -71,7 +82,15 @@ await click(missPair.a.x, missPair.a.y, 80)
 await click(missPair.b.x, missPair.b.y, 900)
 result.afterMiss = await pairs()
 
-// честное совпадение: две карты одного вида
+// подсматривание: карты открываются и закрываются обратно
+const peeksBefore = (await pairs()).peeks
+await page.keyboard.press('KeyP')
+await page.waitForTimeout(300)
+await shot('04-peek')
+await page.waitForTimeout(900)
+const peeksAfter = (await pairs()).peeks
+result.peeksUsed = peeksBefore - peeksAfter
+
 const matchPair = await page.evaluate(() => {
   const cards = window.__pairs.debugCards()
   const a = cards.find((c) => c.state === 'hidden')
@@ -81,56 +100,28 @@ const matchPair = await page.evaluate(() => {
 await click(matchPair.a.x, matchPair.a.y, 80)
 await click(matchPair.b.x, matchPair.b.y, 300)
 result.afterMatch = await pairs()
-await shot('03-play')
-
 await page.evaluate(() => window.__pairs.debugSolveStage())
-await page.waitForTimeout(300)
-result.stageDone = await pairs()
-await shot('04-stage-done')
-await page.waitForTimeout(1600)
-
-// ── 3. Этап 2: показ → победа → пароль ───────────────────────────────
-result.stage2Intro = await pairs()
+await page.waitForTimeout(1800)
 await page.keyboard.press('Space')
 await page.waitForTimeout(300)
 await page.evaluate(() => window.__pairs.debugSkipMemorize())
 await page.evaluate(() => window.__pairs.debugSolveStage())
 await page.waitForTimeout(1800)
 result.won = await pairs()
-await shot('05-password')
+result.noPrintFormOnGame = await page.evaluate(
+  () => typeof window.__pairs.debugForm !== 'function',
+)
+await shot('05-code')
 
-// ── 4. Печать: вводим произвольный код и жмём кнопку честно ──────────
-const field = await page.evaluate(() => {
-  // координаты строки и кнопки отдаёт игра после отрисовки
-  return window.__pairs.debugForm()
-})
-await click(field.input.x, field.input.y, 200)
-await page.keyboard.type('0000', { delay: 40 })
-await click(field.print.x, field.print.y, 400)
+// ── 3. print.local: строка пароля и честная «Печать» ─────────────────
+result.printPage = await navigate('print.local')
+await shot('06-print-site')
+const form = await page.evaluate(() => window.__printsite?.debugForm() ?? null)
+await click(form.input.x, form.input.y, 200)
+await page.keyboard.type((await pairs()).password, { delay: 40 })
+await click(form.print.x, form.print.y, 600)
 result.printedCode = await page.evaluate(() => window.__desk.debugInfo().printedCode)
-result.formState = await pairs()
-await shot('06-printed')
-
-// ── 5. Провал: сливаем 8 попыток честными промахами ──────────────────
-await page.evaluate(() => window.__pairs.reset())
-await page.keyboard.press('Space')
-await page.waitForTimeout(200)
-await page.evaluate(() => window.__pairs.debugSkipMemorize())
-for (let i = 0; i < 9; i++) {
-  const s = await pairs()
-  if (s.state !== 'play') break
-  const miss = await page.evaluate(() => {
-    const cards = window.__pairs.debugCards()
-    const a = cards.find((c) => c.state === 'hidden')
-    const b = cards.find((c) => c.state === 'hidden' && c.kind !== a.kind)
-    return { a: { x: a.x, y: a.y }, b: { x: b.x, y: b.y } }
-  })
-  await click(miss.a.x, miss.a.y, 60)
-  await click(miss.b.x, miss.b.y, 820)
-}
-result.failState = await pairs()
-result.pairsLost = await page.evaluate(() => window.__desk.debugInfo().pairsLost)
-await shot('07-fail')
+await shot('07-printed')
 
 console.log(JSON.stringify(result, null, 2))
 console.log(errors.length ? `ОШИБКИ:\n${errors.join('\n')}` : 'ошибок в консоли нет')

@@ -534,6 +534,19 @@ export class CameraFeed {
       ctx.textAlign = 'left'
     }
 
+    // подсказка про скан висит на кухне всегда, меняется по состоянию
+    text(
+      ctx,
+      this.scan ? 'клик по объекту — команда · TAB — выключить скан' : 'TAB — подсветить объекты и команды',
+      f.x + f.w / 2,
+      f.y + 12,
+      {
+        size: 9,
+        color: this.scan ? 'rgba(140, 220, 255, 0.85)' : 'rgba(200, 214, 200, 0.55)',
+        align: 'center',
+      },
+    )
+
     // скан: скобки-уголки вокруг объектов и подписи
     if (this.scan && !this.menu) {
       for (const id of ['knife', 'fridge', 'meat', 'stove', 'printer', 'exit']) {
@@ -564,11 +577,6 @@ export class CameraFeed {
         ctx.fillText(p.label, sx, sy - r - 8)
         ctx.textAlign = 'left'
       }
-      text(ctx, 'клик по объекту — команда · TAB — выключить скан', f.x + f.w / 2, f.y + 12, {
-        size: 9,
-        color: 'rgba(140, 220, 255, 0.85)',
-        align: 'center',
-      })
     }
 
     // меню команд

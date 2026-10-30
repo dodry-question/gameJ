@@ -43,6 +43,12 @@ const desk = () => page.evaluate(() => ({
   escaped: window.__desk?.escaped ?? null,
   printed: window.__desk?.printedCode ?? null,
 }))
+const navigate = async (host) => {
+  // адрес известен — можно через историю браузера напрямую
+  await page.evaluate((h) => window.__browser?.navigate?.(h), host)
+  await page.waitForTimeout(1300)
+  return page.evaluate(() => window.__browser?.page ?? null)
+}
 /** Команда с ожиданием: она занята, пока не дойдёт и не сделает. */
 const doCmd = async (id, action, timeout = 20000) => {
   await page.evaluate(
@@ -101,14 +107,17 @@ await shot('03-fridge')
 await doCmd('meat', 'cut')
 result.meatCut = (await flags()).meatCut
 await shot('04-plate')
+// принтер: первый раз она откажется («там так темно»), второй — пойдёт
+await doCmd('printer', 'read')
+await doCmd('printer', 'read')
+result.noteTextAfterPrinter = await page.evaluate(() =>
+  window.__desk?.windows.find((w) => w.app.title.includes('заметки'))?.app.text ?? null,
+)
 
-// ── 5. pairs.local: два этапа → пароль → печать ──────────────────────
+// ── 5. pairs.local: два этапа → код → print.local → печать ───────────
 await click(38, 704, 300)
 await click(110, 522, 1500)
-await click(400, 143, 200)
-await page.keyboard.type('pairs.local', { delay: 15 })
-await page.keyboard.press('Enter')
-await page.waitForTimeout(1300)
+result.pairsPage = await navigate('pairs.local')
 await page.keyboard.press('Space') // этап 1: показ
 await page.waitForTimeout(300)
 await page.evaluate(() => window.__pairs.debugSkipMemorize())
@@ -121,20 +130,24 @@ await page.evaluate(() => window.__pairs.debugSolveStage())
 await page.waitForTimeout(1800)
 const password = await page.evaluate(() => window.__pairs.debugState().password)
 result.password = password
-await shot('05-password')
+await shot('05-code')
 
-// печатаем настоящий пароль честно: строка + кнопка
-await page.evaluate(() => {
-  // поднять браузер поверх (он уже активен) и кликнуть по форме из игры
-  const form = window.__pairs.debugForm()
-  return form
-})
-const form = await page.evaluate(() => window.__pairs.debugForm())
+// печать на отдельном узле print.local
+result.printPage = await navigate('print.local')
+const form = await page.evaluate(() => window.__printsite?.debugForm() ?? null)
 await click(form.input.x, form.input.y, 200)
 await page.keyboard.type(password, { delay: 40 })
 await click(form.print.x, form.print.y, 600)
 result.printed = (await desk()).printed
 await shot('06-printed')
+
+// заметки оператора: блокнот открылся сам и собрал оба адреса
+result.noteTitle = await page.evaluate(() =>
+  window.__desk?.windows.some((w) => w.app.title.includes('заметки')) ?? null,
+)
+result.noteText = await page.evaluate(() =>
+  window.__desk?.windows.find((w) => w.app.title.includes('заметки'))?.app.text ?? null,
+)
 
 // ── 6. Она берёт бумажку и выходит: «ОНА УШЛА» ───────────────────────
 await page.waitForFunction(() => window.__desk?.escaped === true, null, { timeout: 45000 })
@@ -144,6 +157,17 @@ await shot('07-escaped')
 // ── 7. Провал: мурзик, маньяк, «ВЫ ПРОИГРАЛИ» ────────────────────────
 await page.reload({ waitUntil: 'networkidle' })
 await page.waitForTimeout(1200)
+await page.waitForFunction(
+  () => window.__cctv?.girlState === 'kitchen',
+  null,
+  { timeout: 30000 },
+)
+// смотрим КАМ-05, когда она уже на кухне
+await page.evaluate(() => {
+  window.__cctv.setView('05')
+  window.__tds.feed.channel = '05'
+})
+await page.waitForTimeout(3000)
 await page.evaluate(() => {
   // тот же путь короче: сцена провала запускается напрямую
   window.__desk.pairsLost()

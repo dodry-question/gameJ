@@ -87,9 +87,31 @@ export function buildKitchen(scene: THREE.Scene): Kitchen {
         c.fillRect(x, y, 1, 32)
       }
     }
-    for (let i = 0; i < 60; i++) {
+    // выбитая плитка и грязь: заброшка, а не столовая
+    for (let i = 0; i < 3; i++) {
+      c.fillStyle = 'rgba(16, 18, 16, 0.85)'
+      c.fillRect(Math.floor(Math.random() * 4) * 32 + 1, Math.floor(Math.random() * 4) * 32 + 1, 30, 30)
+    }
+    for (let i = 0; i < 90; i++) {
       c.fillStyle = 'rgba(18,20,22,0.12)'
       c.fillRect(Math.random() * 126, Math.random() * 126, rnd2(1, 3), rnd2(1, 3))
+    }
+    for (let i = 0; i < 5; i++) {
+      const gx = rnd2(6, 120)
+      const gy = rnd2(6, 120)
+      const gr = c.createRadialGradient(gx, gy, 1, gx, gy, rnd2(8, 20))
+      gr.addColorStop(0, 'rgba(14, 16, 13, 0.5)')
+      gr.addColorStop(1, 'rgba(14, 16, 13, 0)')
+      c.fillStyle = gr
+      c.fillRect(gx - 22, gy - 22, 44, 44)
+    }
+    c.strokeStyle = 'rgba(20, 22, 20, 0.6)'
+    c.lineWidth = 1
+    for (let i = 0; i < 3; i++) {
+      c.beginPath()
+      c.moveTo(rnd2(0, 128), rnd2(0, 128))
+      c.lineTo(rnd2(0, 128), rnd2(0, 128))
+      c.stroke()
     }
   })
   const floorMat = new THREE.MeshLambertMaterial({ map: tileTex })
@@ -171,39 +193,50 @@ export function buildKitchen(scene: THREE.Scene): Kitchen {
   knife.rotation.y = 0.5
   g.add(knife)
 
-  // ── холодильник ───────────────────────────────────────────────────
-  const fridgeMat = new THREE.MeshLambertMaterial({ color: 0x9aa0a2 })
-  const fridge = new THREE.Mesh(new THREE.BoxGeometry(0.85, 1.8, 0.8), fridgeMat)
-  fridge.position.set(1.72, 0.9, -11.2)
+  // ── холодильник: открытый корпус, иначе мясо не видно и не кликнуть ─
+  const fridgeMat = new THREE.MeshLambertMaterial({ color: 0x8e9496 })
+  const fridge = new THREE.Group()
+  fridge.position.set(1.72, 0, -11.2)
+  const panel = (w: number, h: number, d: number, x: number, y: number, z: number): void => {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), fridgeMat)
+    m.position.set(x, y, z)
+    fridge.add(m)
+  }
+  panel(0.05, 1.8, 0.8, -0.4, 0.9, 0) // левая стенка
+  panel(0.05, 1.8, 0.8, 0.4, 0.9, 0) // правая
+  panel(0.8, 1.8, 0.05, 0, 0.9, -0.375) // задняя
+  panel(0.8, 0.06, 0.8, 0, 1.77, 0) // крышка
+  panel(0.8, 0.06, 0.8, 0, 0.03, 0) // дно
+  panel(0.7, 0.04, 0.62, 0, 1.0, 0.02) // полка
   g.add(fridge)
-  // дверца на петле: открывается при «Осмотри»
+  // дверца на петле слева: открывается на камеру
   const fridgeDoorPivot = new THREE.Group()
-  fridgeDoorPivot.position.set(1.31, 1.05, -11.55)
-  const fridgeDoor = new THREE.Mesh(new THREE.BoxGeometry(0.06, 1.5, 0.74), fridgeMat)
-  fridgeDoor.position.set(0, 0, 0.37)
+  fridgeDoorPivot.position.set(1.32, 1.05, -10.8)
+  const fridgeDoor = new THREE.Mesh(new THREE.BoxGeometry(0.8, 1.5, 0.06), fridgeMat)
+  fridgeDoor.position.set(0.4, 0, 0)
   fridgeDoorPivot.add(fridgeDoor)
   const fridgeHandle = new THREE.Mesh(
-    new THREE.BoxGeometry(0.04, 0.4, 0.05),
+    new THREE.BoxGeometry(0.05, 0.4, 0.05),
     new THREE.MeshLambertMaterial({ color: 0x54585a }),
   )
-  fridgeHandle.position.set(0, 0.2, 0.7)
+  fridgeHandle.position.set(0.72, 0.2, 0)
   fridgeDoorPivot.add(fridgeHandle)
   g.add(fridgeDoorPivot)
-  // магнитики и наклейки — кухня жилая
-  for (const [dz, color] of [
-    [-11.35, 0xb23a2e],
-    [-11.15, 0xd8b25a],
-    [-10.95, 0x4f7a3c],
+  // магнитики на дверце
+  for (const [dx, color] of [
+    [0.28, 0xb23a2e],
+    [0.45, 0xd8b25a],
+    [0.6, 0x4f7a3c],
   ] as const) {
     const mag = new THREE.Mesh(
-      new THREE.BoxGeometry(0.02, 0.09, 0.09),
+      new THREE.BoxGeometry(0.09, 0.09, 0.02),
       new THREE.MeshLambertMaterial({ color }),
     )
-    mag.position.set(1.245, 1.5, dz)
-    g.add(mag)
+    mag.position.set(dx, 1.5, 0.035)
+    fridgeDoorPivot.add(mag)
   }
 
-  // мясо на полке: видно, когда дверца открыта
+  // мясо на полке: видно и кликабельно, когда дверца открыта
   const meat = new THREE.Group()
   const meatBody = new THREE.Mesh(
     new THREE.SphereGeometry(0.14, 10, 8),
@@ -218,16 +251,16 @@ export function buildKitchen(scene: THREE.Scene): Kitchen {
   bone.rotation.z = Math.PI / 2
   bone.position.set(0.2, 0.02, 0.04)
   meat.add(bone)
-  meat.position.set(1.5, 1.15, -11.2)
+  meat.position.set(1.68, 1.14, -11.2)
   meat.visible = false
   g.add(meat)
 
-  // железка с адресом: остаётся на столе после разделки
+  // железка с адресом: остаётся на полке после разделки
   const plate = new THREE.Mesh(
     new THREE.BoxGeometry(0.22, 0.015, 0.14),
     new THREE.MeshLambertMaterial({ color: 0x7d8288 }),
   )
-  plate.position.set(1.5, 1.16, -11.2)
+  plate.position.set(1.68, 1.15, -11.2)
   plate.visible = false
   g.add(plate)
 
@@ -354,22 +387,101 @@ export function buildKitchen(scene: THREE.Scene): Kitchen {
   lampPivot.add(lamp)
   g.add(lampPivot)
 
-  // слабая подсветка тёмного угла и отсвет из коридора
-  const corner = new THREE.PointLight(0x8a94a0, 1.6, 2.6, 2)
+  // слабая подсветка тёмного угла и отсвет из коридора — кухня мёртвая
+  const corner = new THREE.PointLight(0x8a94a0, 1.1, 2.6, 2)
   corner.position.set(-1.5, 1.6, -12.0)
   g.add(corner)
-  const spill = new THREE.PointLight(0xb9c8a8, 3, 3.2, 2)
+  const spill = new THREE.PointLight(0xb9c8a8, 2.2, 3.2, 2)
   spill.position.set(0, 2.1, KITCHEN.z1 - 0.4)
   g.add(spill)
 
-  // ── мусор и жизнь ─────────────────────────────────────────────────
-  const junkMat = new THREE.MeshLambertMaterial({ color: 0x6a675c })
+  // ── разруха: мусор, облупившиеся пятна, обрушенный стул, провод ────
+  const rubbleMat = new THREE.MeshLambertMaterial({ color: 0x3c3e38 })
+  for (let i = 0; i < 14; i++) {
+    const x = rnd2(KITCHEN.x0 + 0.4, KITCHEN.x1 - 0.4)
+    const z = rnd2(KITCHEN.z0 + 0.4, KITCHEN.z1 - 0.4)
+    const s = rnd2(0.05, 0.16)
+    const piece =
+      Math.random() < 0.5
+        ? new THREE.Mesh(new THREE.BoxGeometry(s, s * 0.4, s * rnd2(0.6, 1.4)), rubbleMat)
+        : new THREE.Mesh(new THREE.ConeGeometry(s * 0.5, s, 5), rubbleMat)
+    piece.position.set(x, s * 0.2, z)
+    piece.rotation.y = Math.random() * Math.PI
+    piece.rotation.z = rnd2(-0.2, 0.2)
+    g.add(piece)
+  }
+  // тёмные пятна на полу: подтёки и старая грязь
+  const stainTex = tex(64, 64, (c) => {
+    const gr = c.createRadialGradient(32, 32, 4, 32, 32, 30)
+    gr.addColorStop(0, 'rgba(12, 14, 12, 0.75)')
+    gr.addColorStop(1, 'rgba(12, 14, 12, 0)')
+    c.fillStyle = gr
+    c.fillRect(0, 0, 64, 64)
+  })
+  for (let i = 0; i < 7; i++) {
+    const stain = new THREE.Mesh(
+      new THREE.PlaneGeometry(rnd2(0.5, 1.1), rnd2(0.5, 1.1)),
+      new THREE.MeshBasicMaterial({ map: stainTex, transparent: true, depthWrite: false }),
+    )
+    stain.rotation.x = -Math.PI / 2
+    stain.rotation.z = Math.random() * Math.PI
+    stain.position.set(rnd2(-1.8, 1.8), 0.012, rnd2(-12.4, -9.6))
+    g.add(stain)
+  }
+  // обрушенный стул у дальней стены
+  const chair = new THREE.Group()
+  const chairMat = new THREE.MeshLambertMaterial({ color: 0x574434 })
+  const seat = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.05, 0.4), chairMat)
+  seat.rotation.z = 0.4
+  chair.add(seat)
+  const chairBack = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.5, 0.05), chairMat)
+  chairBack.position.set(-0.12, 0.22, -0.18)
+  chairBack.rotation.z = 0.4
+  chair.add(chairBack)
+  for (const [lx, lz] of [
+    [-0.16, -0.16],
+    [0.18, 0.1],
+  ]) {
+    const leg = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.45, 0.05), chairMat)
+    leg.position.set(lx, 0.1, lz)
+    leg.rotation.z = 0.4
+    chair.add(leg)
+  }
+  chair.position.set(-0.8, 0.06, -12.3)
+  chair.rotation.y = 0.7
+  g.add(chair)
+  // оборванный провод из потолка
+  const wire = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.012, 0.008, 0.9, 4),
+    new THREE.MeshLambertMaterial({ color: 0x1c1e1a }),
+  )
+  wire.position.set(1.2, 1.95, -12.3)
+  wire.rotation.z = 0.5
+  g.add(wire)
+  // щиток со свисающей дверцей на стене
+  const board = new THREE.Mesh(
+    new THREE.BoxGeometry(0.5, 0.7, 0.06),
+    new THREE.MeshLambertMaterial({ color: 0x4a4e48 }),
+  )
+  board.position.set(-2.15, 1.5, -10.2)
+  board.rotation.y = Math.PI / 2
+  g.add(board)
+  const boardDoor = new THREE.Mesh(
+    new THREE.BoxGeometry(0.02, 0.66, 0.44),
+    new THREE.MeshLambertMaterial({ color: 0x565a52 }),
+  )
+  boardDoor.position.set(-2.08, 1.42, -10.24)
+  boardDoor.rotation.y = Math.PI / 2 - 0.7
+  g.add(boardDoor)
+
+  // ── старый мусор у стен ───────────────────────────────────────────
+  const junk2Mat = new THREE.MeshLambertMaterial({ color: 0x6a675c })
   for (const [x, z, w] of [
     [-0.4, -12.5, 0.3],
     [1.0, -10.4, 0.22],
     [-0.9, -9.6, 0.18],
   ] as const) {
-    const box = new THREE.Mesh(new THREE.BoxGeometry(w, 0.05, w * 0.7), junkMat)
+    const box = new THREE.Mesh(new THREE.BoxGeometry(w, 0.05, w * 0.7), junk2Mat)
     box.position.set(x, 0.03, z)
     box.rotation.y = Math.random() * Math.PI
     g.add(box)
@@ -440,12 +552,12 @@ export function buildKitchen(scene: THREE.Scene): Kitchen {
     }
     const flick = 1 + Math.sin(time * 43) * 0.05
     const on = time > blinkUntil ? 1 : 0
-    lamp.intensity = 16 * flick * on
+    lamp.intensity = 13 * flick * on
     ;(bulb.material as THREE.MeshBasicMaterial).color.setHex(on ? 0xffe9b0 : 0x3a352a)
 
     // дверца холодильника и дверь выхода
     fridgeOpenT += (fridgeTarget - fridgeOpenT) * Math.min(1, dt * 4)
-    fridgeDoorPivot.rotation.y = fridgeOpenT * 1.9
+    fridgeDoorPivot.rotation.y = -fridgeOpenT * 1.9
     exitOpenT += (exitTarget - exitOpenT) * Math.min(1, dt * 2.4)
     exitPivot.rotation.y = -exitOpenT * 1.5
 
@@ -507,10 +619,10 @@ function addrTex(): THREE.CanvasTexture {
     c.font = 'bold 34px "Courier New", monospace'
     c.textAlign = 'center'
     c.textBaseline = 'middle'
-    c.fillText('pairs.local', 128, 40)
+    c.fillText('print.local', 128, 40)
     c.font = '22px "Courier New", monospace'
     c.fillStyle = '#5c5c54'
-    c.fillText('АРХИВ ПАМЯТИ', 128, 74)
+    c.fillText('ПЕЧАТЬ ПАРОЛЯ', 128, 74)
     c.strokeStyle = '#8a7a1a'
     c.strokeRect(2, 2, 252, 92)
   })

@@ -94,6 +94,8 @@ export class Cctv {
   onEscaped?: () => void
   /** Маньяк добился своего: рабочий стол показывает «ВЫ ПРОИГРАЛИ». */
   onDead?: () => void
+  /** Важная реплика: рабочий стол открывает заметки и дописывает строку. */
+  onNoteAppend?: (line: string) => void
 
   private renderer: THREE.WebGLRenderer
   private scene = new THREE.Scene()
@@ -179,6 +181,9 @@ export class Cctv {
   private printedCode = ''
   /** Сцена нападения: −1 нет, 0…3.5 идёт, −2 закончилась. */
   private attackT = -1
+  private deadSent = false
+  /** Провал случился, пока она ещё не дошла до кухни. */
+  private maniacPending = false
   private raycaster = new THREE.Raycaster()
   private euler = new THREE.Euler()
   private delta = new THREE.Quaternion()
@@ -243,9 +248,35 @@ export class Cctv {
     this.dust = room.dust
     this.kitchen = buildKitchen(this.scene)
     this.loadGirl()
-
+    this.loadManiac()
     // Отладочный доступ к сцене — для tools/rig-axes.mjs и tools/shot-*.mjs.
     ;(window as unknown as { __cctv?: Cctv }).__cctv = this
+  }
+
+  /** Маньяк из набора PSX-персонажей: грузим своего FBX с текстурой. */
+  private loadManiac(): void {
+    const manager = new THREE.LoadingManager()
+    manager.setURLModifier((url) => (url.toLowerCase().endsWith('.png') ? '/cctv/maniac.png' : url))
+    const tex = new THREE.TextureLoader(manager).load('/cctv/maniac.png')
+    tex.magFilter = THREE.NearestFilter
+    tex.minFilter = THREE.NearestFilter
+    tex.colorSpace = THREE.SRGBColorSpace
+    const skin = new THREE.MeshLambertMaterial({ map: tex })
+    new FBXLoader(manager).load('/cctv/maniac.fbx', (fbx) => {
+      fbx.scale.setScalar(0.0037)
+      fbx.traverse((o) => {
+        if ((o as THREE.Mesh).isMesh) {
+          const mesh = o as THREE.Mesh
+          mesh.material = skin
+          mesh.frustumCulled = false
+        }
+      })
+      // примитивная болванка больше не нужна — модель становится фигурой
+      while (this.kitchen.maniac.children.length > 0) {
+        this.kitchen.maniac.remove(this.kitchen.maniac.children[0])
+      }
+      this.kitchen.maniac.add(fbx)
+    })
   }
 
   private loadGirl(): void {
@@ -299,8 +330,7 @@ export class Cctv {
     })
   }
 
-  /** Кольца верёвки двигаются вместе с кистями, пока девушка связана. */
-  private updateWristRopes(): void {
+  /** Кольца верёвки двигаются вместе с кистями, пока девушка связана. */  private updateWristRopes(): void {
     const tied = this.state === 'tied'
     for (const ring of this.wristRopes) ring.visible = tied
     if (!tied) return
@@ -354,6 +384,11 @@ export class Cctv {
   /** Параметры единственной камеры — для карты и радара. */
   get cam(): typeof Cctv.CAM {
     return Cctv.CAM
+  }
+
+  /** Параметры камеры кухни — для узла 05 на карте. */
+  get cam05(): typeof Cctv.CAM05 {
+    return Cctv.CAM05
   }
 
   private applyCam(): void {
@@ -488,6 +523,11 @@ export class Cctv {
       this.gestures()
       this.move(dt)
       this.kitchenTask(dt)
+      // провал мог случиться в дороге: маньяк ждёт её на кухне
+      if (this.maniacPending && this.state === 'kitchen') {
+        this.maniacPending = false
+        this.startAttack()
+      }
       this.kitchenAttack(dt)
       this.animate(dt)
     }
@@ -1178,6 +1218,15 @@ export class Cctv {
   /** Провал головоломки: маньяк бросается из проёма. */
   maniacAttack(): void {
     if (this.attackT >= 0 || this.state === 'tied') return
+    // нападение возможно только на кухне: если она ещё в пути — откладываем
+    if (this.state !== 'kitchen') {
+      this.maniacPending = true
+      return
+    }
+    this.startAttack()
+  }
+
+  private startAttack(): void {
     this.task = null
     this.attackT = 0
     this.kitchen.maniac.visible = true
@@ -1238,6 +1287,9 @@ export class Cctv {
         t.fired = true
         this.flags.knife = true
         this.fear = 0.65
+        // нож больше не на столе: она его забрала
+        const knifeObj = this.kitchen.objects.find((o) => o.id === 'knife')
+        if (knifeObj) knifeObj.mesh.visible = false
         this.say('кровь... она ещё свежая. не свернулась. за мной шли недавно', 4.2)
       }
       if (at > 1.8) this.task = null
@@ -1264,9 +1316,10 @@ export class Cctv {
         this.kitchen.plate.visible = true
         this.flags.meatCut = true
         this.say('внутри железка... на ней выбит адрес', 3)
+        this.onNoteAppend?.('Железка внутри мяса: выбит адрес pairs.local — это головоломка')
       }
       if (at > 2.6) {
-        this.say('pairs точка локал. это их архив — записывай!', 4)
+        this.say('пары точка локал. это их архив — записывай!', 4)
         this.task = null
       }
       return
@@ -1282,7 +1335,8 @@ export class Cctv {
     if (t.id === 'printer' && t.action === 'read') {
       if (at > 0.8 && !t.fired) {
         t.fired = true
-        this.say('на наклейке адрес: pairs.local — их архив памяти', 4)
+        this.say('на наклейке адрес: print.local — туда вводят пароль для печати', 4)
+        this.onNoteAppend?.('Принтер на кухне: print.local — ввести пароль и нажать «Печать»')
       }
       if (at > 1.9) this.task = null
       return
@@ -1340,9 +1394,11 @@ export class Cctv {
     m.position.x = 0 + (tx - 0) * rush
     m.position.z = KITCHEN.z1 - 0.3 + (tz - (KITCHEN.z1 - 0.3)) * rush
     m.rotation.y = Math.atan2(tx - m.position.x, tz - m.position.z)
-    // замах
-    const arm = m.children[4] as THREE.Mesh
-    arm.rotation.z = rush < 1 ? -0.5 : -1.9 + Math.sin(t * 30) * 0.5
+    // замах всем корпусом: наклоняется и делает выпад в момент удара
+    m.rotation.x = rush < 1 ? 0.12 : 0.35 + Math.sin(t * 26) * 0.25
+    const lunge = rush >= 1 ? Math.max(0, Math.sin((t - 1.1) * 9)) * 0.22 : 0
+    m.position.x += Math.sin(m.rotation.y) * lunge
+    m.position.z += Math.cos(m.rotation.y) * lunge
     // она разворачивается к нему и дрожит
     this.yaw = this.yawTarget = Math.atan2(m.position.x - g.position.x, m.position.z - g.position.z)
     g.rotation.y = this.yaw
@@ -1359,8 +1415,6 @@ export class Cctv {
       this.attackT = -2
     }
   }
-
-  private deadSent = false
 
   // ── ввод по кадру кухни ───────────────────────────────────────────
 

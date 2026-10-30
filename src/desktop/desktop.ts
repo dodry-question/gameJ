@@ -132,11 +132,14 @@ type Band = {
 }
 
 /**
- * Установка tds.exe: сначала вирус-тыква на весь экран, потом он медленно
- * тает, и только затем идёт обычный индикатор установки.
+ * Установка tds.exe: сначала честное скачивание файла с прогрессом, потом
+ * на весь экран лезет вирус-тыква, медленно тает, и только затем идёт
+ * обычный индикатор установки.
  */
 type Install = {
   start: number
+  /** Конец скачивания файла: до него — диалог загрузки. */
+  dlEnd: number
   /** Конец показа вируса и конец его растворения. */
   holdEnd: number
   fadeEnd: number
@@ -189,6 +192,8 @@ export class Desktop {
   // кухня: пароль, напечатанный с pairs.local, и исход головоломки
   private printedCode: string | null = null
   private pairsLostFlag = false
+  /** Заметки оператора: важные реплики с кухни попадают в блокнот. */
+  private noteText = ''
   /** Сцена «ВЫ ПРОИГРАЛИ»: момент показать и что показываем. */
   private deadAt = 0
   private girlDead = false
@@ -232,6 +237,7 @@ export class Desktop {
       this.deadAt = performance.now() + 1400
       this.dirty = true
     }
+    cctv.onNoteAppend = (line) => this.appendNote(line)
     // Через пять секунд после входа игрок должен понять, что от него хотят.
     window.setTimeout(() => this.notifyMail(), 5000)
   }
@@ -419,6 +425,9 @@ export class Desktop {
       browser.onPairsFail = () => this.pairsLost()
       browser.onPrintCode = (code) => this.printCode(code)
       browser.onPassword = (code) => getCctv().setExitCode(code)
+      // игровые узлы открываются только «по сюжету»: иначе софт-лок
+      browser.canOpenLock = () => this.cameraAccess
+      browser.canOpenPairs = () => getCctv().kitchenReady
       return browser
     }
     if (key === 'mail') return this.getMail()
@@ -697,15 +706,16 @@ export class Desktop {
   // ── файл из письма ───────────────────────────────────────────────
 
   /**
-   * Вложение скачано. Вместо честной установки на экран лезет вирус-тыква:
-   * он держится, медленно растворяется, и только потом начинается установка.
+   * Вложение скачивается: прогресс загрузки файла, и только когда файл
+   * «докачался» — на экран лезет вирус-тыква, растворяется и ставится.
    */
   private beginInstall(): void {
     if (this.install || this.icons.some((i) => i.id === 'tds')) return
     const now = performance.now()
-    const holdEnd = now + 1400
+    const dlEnd = now + 3200
+    const holdEnd = dlEnd + 1400
     const fadeEnd = holdEnd + 1800
-    this.install = { start: now, holdEnd, fadeEnd, end: fadeEnd + 2200 }
+    this.install = { start: now, dlEnd, holdEnd, fadeEnd, end: fadeEnd + 2200 }
     this.sound.busy()
     this.dirty = true
   }
@@ -744,6 +754,10 @@ export class Desktop {
   private drawInstall(): void {
     if (!this.install) return
     const now = performance.now()
+    if (now < this.install.dlEnd) {
+      this.drawDownload(now)
+      return
+    }
     if (now < this.install.fadeEnd) {
       this.drawVirus(now)
       return
@@ -785,6 +799,52 @@ export class Desktop {
 
     text(ctx, `${Math.round(p * 100)}%`, x, track.y + track.h + 14, { size: 11, color: C.textDim })
     text(ctx, 'Не выключайте компьютер.', r.x + r.w - 18, track.y + track.h + 14, {
+      size: 11,
+      color: C.textDim,
+      align: 'right',
+    })
+  }
+
+  /** Диалог скачивания: полоса прогресса, пока файл «качается» с узла. */
+  private drawDownload(now: number): void {
+    const inst = this.install!
+    const ctx = this.ctx
+    const p = clamp((now - inst.start) / (inst.dlEnd - inst.start), 0, 1)
+
+    const r: Rect = { x: (DESKTOP_W - 380) / 2, y: (DESKTOP_H - TASKBAR - 156) / 2, w: 380, h: 150 }
+    panel(ctx, r, true, 2)
+    const bar: Rect = { x: r.x + 3, y: r.y + 3, w: r.w - 6, h: 16 }
+    const g = ctx.createLinearGradient(bar.x, bar.y, bar.x, bar.y + bar.h)
+    g.addColorStop(0, C.titleOn2)
+    g.addColorStop(1, C.titleOn)
+    ctx.fillStyle = g
+    ctx.fillRect(bar.x, bar.y, bar.w, bar.h)
+    text(ctx, 'Загрузка файла', bar.x + 5, bar.y + 8.5, { size: 12, bold: true, color: C.titleText })
+
+    const x = r.x + 18
+    let y = r.y + 34
+    text(ctx, 'cam04-archive.zip с intranet.local', x, y, { size: 12, bold: true })
+    y += 18
+    text(ctx, 'Не закрывайте окно: файл ставится на рабочий стол.', x, y, {
+      size: 11,
+      color: C.textDim,
+    })
+
+    const track: Rect = { x, y: y + 16, w: r.w - 36, h: 20 }
+    panel(ctx, track, false, 2)
+    const inner: Rect = { x: track.x + 2, y: track.y + 2, w: track.w - 4, h: track.h - 4 }
+    fill(ctx, inner, '#8e8e86')
+    const done: Rect = { ...inner, w: Math.round(inner.w * p) }
+    fill(ctx, done, '#2c4f86')
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.18)'
+    for (let sx = inner.x + 12; sx < inner.x + inner.w; sx += 12) ctx.fillRect(sx, inner.y, 1, inner.h)
+
+    const kb = Math.round(2400 * p)
+    text(ctx, `${Math.round(p * 100)}% · ${kb} КБ из 2 400`, x, track.y + track.h + 14, {
+      size: 11,
+      color: C.textDim,
+    })
+    text(ctx, 'Скорость: 33,6 Кбит/с', r.x + r.w - 18, track.y + track.h + 14, {
       size: 11,
       color: C.textDim,
       align: 'right',
@@ -1207,6 +1267,15 @@ export class Desktop {
     getCctv().maniacAttack()
     this.deadAt = performance.now() + 4200
     this.dirty = true
+  }
+
+  /** Она сказала что-то важное: блокнот-заметки открывается с новой строкой. */
+  private appendNote(line: string): void {
+    if (!this.noteText) this.noteText = 'ЗАМЕТКИ ОПЕРАТОРА\n-----------------'
+    const now = new Date()
+    const p = (n: number): string => String(n).padStart(2, '0')
+    this.noteText += `\n${p(now.getHours())}:${p(now.getMinutes())} — ${line}`
+    this.openNotepadWith('заметки.txt', this.noteText)
   }
 
   private toastRect(): Rect {
