@@ -25,3 +25,4 @@ dist-ssr
 
 # ZCode Sites stage (не коммитится)
 .zcode-site
+.mixamo-profile/
