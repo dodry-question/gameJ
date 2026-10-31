@@ -146,6 +146,8 @@ type Install = {
   /** Конец показа вируса и конец его растворения. */
   holdEnd: number
   fadeEnd: number
+  /** Конец враждебного терминала: он ставит точку в «установке». */
+  cmdEnd: number
   end: number
 }
 
@@ -210,6 +212,8 @@ export class Desktop {
   private cineAt = 0
   private offPlayed = false
   private breathStarted = false
+  /** Сколько строк [!!] терминала уже озвучено ошибкой. */
+  private cmdSounds = 0
   /** Загрузочный экран Win2000: играет один раз при старте, клик пропускает. */
   private bootUntil = performance.now() + 1600
   /** Отладка ?pairs уже отработала: перескок на мини-игру выполняется один раз. */
@@ -291,6 +295,15 @@ export class Desktop {
 
     if (this.install) {
       this.dirty = true
+      // строки [!!] враждебного терминала — каждая со системной ошибкой
+      if (now >= this.install.fadeEnd && now < this.install.cmdEnd) {
+        const passed = now - this.install.fadeEnd
+        const alarms = passed >= (6 / 11) * 2400 ? (passed >= (7 / 11) * 2400 ? 2 : 1) : 0
+        if (alarms > this.cmdSounds) {
+          this.cmdSounds = alarms
+          this.sound.error()
+        }
+      }
       if (now >= this.install.end) {
         this.install = null
         this.dropPayload()
@@ -869,7 +882,9 @@ export class Desktop {
     const dlEnd = now + 1500
     const holdEnd = dlEnd + 800
     const fadeEnd = holdEnd + 1000
-    this.install = { start: now, dlEnd, holdEnd, fadeEnd, end: fadeEnd + 1100 }
+    const cmdEnd = fadeEnd + 2600
+    this.install = { start: now, dlEnd, holdEnd, fadeEnd, cmdEnd, end: cmdEnd + 800 }
+    this.cmdSounds = 0
     this.sound.busy()
     this.dirty = true
   }
@@ -916,10 +931,14 @@ export class Desktop {
       this.drawVirus(now)
       return
     }
+    if (now < this.install.cmdEnd) {
+      this.drawCmdTerminal(now)
+      return
+    }
 
     const ctx = this.ctx
-    const span = this.install.end - this.install.fadeEnd
-    const p = clamp((now - this.install.fadeEnd) / span, 0, 1)
+    const span = this.install.end - this.install.cmdEnd
+    const p = clamp((now - this.install.cmdEnd) / span, 0, 1)
 
     const r: Rect = { x: (DESKTOP_W - 380) / 2, y: (DESKTOP_H - TASKBAR - 176) / 2, w: 380, h: 176 }
     panel(ctx, r, true, 2)
@@ -957,6 +976,71 @@ export class Desktop {
       color: C.textDim,
       align: 'right',
     })
+  }
+
+  /** Лог враждебного терминала: строки появляются по ходу «установки». */
+  private drawCmdTerminal(now: number): void {
+    const inst = this.install!
+    const ctx = this.ctx
+
+    const r: Rect = { x: (DESKTOP_W - 500) / 2, y: (DESKTOP_H - TASKBAR - 300) / 2, w: 500, h: 300 }
+    // серое окно консоли с фасками, внутри чёрный экран
+    panel(ctx, r, true, 2)
+    const bar: Rect = { x: r.x + 3, y: r.y + 3, w: r.w - 6, h: 18 }
+    const g = ctx.createLinearGradient(bar.x, bar.y, bar.x, bar.y + bar.h)
+    g.addColorStop(0, C.titleOn2)
+    g.addColorStop(1, C.titleOn)
+    ctx.fillStyle = g
+    ctx.fillRect(bar.x, bar.y, bar.w, bar.h)
+    text(ctx, 'C:\WINNT\system32\cmd.exe', bar.x + 6, bar.y + 9, {
+      size: 11,
+      bold: true,
+      color: C.titleText,
+    })
+
+    const body: Rect = { x: r.x + 4, y: r.y + 23, w: r.w - 8, h: r.h - 27 }
+    fill(ctx, body, '#000000')
+    ctx.save()
+    ctx.beginPath()
+    ctx.rect(body.x, body.y, body.w, body.h)
+    ctx.clip()
+
+    const lines: Array<{ s: string; c: string }> = [
+      { s: 'C:\\Documents and Settings\\Operator> tds.exe /install', c: '#c8c8c0' },
+      { s: '', c: '#c8c8c0' },
+      { s: 'TDS TERMINAL SETUP 2.1 — PRIVATE BUILD', c: '#c8c8c0' },
+      { s: '[ok] доступ к CAM-шине блока C ......... получен', c: '#c8c8c0' },
+      { s: '[ok] перехват фреймбуфера .............. выполнен', c: '#c8c8c0' },
+      { s: '[ok] микрофон прослушивается ........... тихо', c: '#c8c8c0' },
+      { s: '[!!] обнаружен антивирус ............... ОТКЛЮЧЁН', c: '#e8523a' },
+      { s: '[!!] журнал безопасности ............... стёрт', c: '#e8523a' },
+      { s: '[ok] служба tdssvc скрыта .............. да', c: '#c8c8c0' },
+      { s: '[ok] ярлык на рабочем столе ............ готов', c: '#c8c8c0' },
+      { s: '', c: '#c8c8c0' },
+      { s: 'смотри. ей нечего тебе сказать.', c: '#7fe08a' },
+    ]
+    const total = 2400
+    const passed = clamp(now - inst.fadeEnd, 0, total)
+    ctx.font = '11px Consolas, "Courier New", monospace'
+    ctx.textBaseline = 'middle'
+    let y = body.y + 12
+    let alarms = 0
+    for (const line of lines) {
+      const at = (lines.indexOf(line) / (lines.length - 1)) * total
+      if (passed >= at) {
+        if (line.s.startsWith('[!!]')) alarms++
+        ctx.fillStyle = line.c
+        ctx.fillText(line.s, body.x + 12, y)
+      }
+      y += 19
+    }
+    // курсор мигает на последней строке
+    if (passed >= total && Math.floor(now / 400) % 2 === 0) {
+      ctx.fillStyle = '#c8c8c0'
+      ctx.fillRect(body.x + 12 + ctx.measureText(lines[lines.length - 1].s).width + 4, y - 19 - 6, 7, 12)
+    }
+    ctx.restore()
+    void alarms
   }
 
   /** Диалог скачивания: полоса прогресса, пока файл «качается» с узла. */
