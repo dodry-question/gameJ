@@ -22,3 +22,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# ZCode Sites stage (не коммитится)
+.zcode-site
