@@ -47,10 +47,10 @@ export function makeFinalPass(): ShaderPass {
         float vig = 1.0 - smoothstep(0.18, 0.75, r2);
         col *= mix(0.35, 1.0, vig);
 
-        // зерно и мелкая дрожь экспозиции
-        float g = hash(uv * uRes + fract(uTime) * 91.7);
-        col += (g - 0.5) * 0.05;
-        col *= 0.975 + 0.025 * sin(uTime * 41.0) * sin(uTime * 2.7);
+        // зерно: крупное и ленивое (плёнка, а не помехи), дрожь экспозиции мягче
+        float g = hash(floor(uv * uRes / 2.5) + floor(uTime * 12.0) * 91.7);
+        col += (g - 0.5) * 0.028;
+        col *= 0.99 + 0.01 * sin(uTime * 41.0) * sin(uTime * 2.7);
 
         gl_FragColor = vec4(col, 1.0);
       }

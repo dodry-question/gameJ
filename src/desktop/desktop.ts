@@ -1,4 +1,4 @@
-import { C, bevel, ellipsis, fill, inside, panel, text } from './draw'
+import { C, bevel, ellipsis, fill, inside, panel, setFont, text } from './draw'
 import type { Rect } from './draw'
 import { drawIcon } from './icons'
 import type { App } from './app'
@@ -46,12 +46,12 @@ const ICON_H = 92
 
 /** Сколько «грузится» программа: браузер тяжелее блокнота. */
 const LAUNCH_MS: Record<string, number> = {
-  browser: 1500,
-  mail: 1100,
-  tds: 900,
-  notepad: 650,
-  computer: 550,
-  trash: 450,
+  browser: 700,
+  mail: 600,
+  tds: 600,
+  notepad: 400,
+  computer: 450,
+  trash: 350,
   image: 450,
   music: 0,
 }
@@ -210,19 +210,25 @@ export class Desktop {
   private cineAt = 0
   private offPlayed = false
   private breathStarted = false
+  /** Загрузочный экран Win2000: играет один раз при старте, клик пропускает. */
+  private bootUntil = performance.now() + 1600
   /** Отладка ?pairs уже отработала: перескок на мини-игру выполняется один раз. */
   private debugPairsDone = false
   /** Страница для открываемого браузера: применится в makeApp после «загрузки». */
   private pendingBrowserPage: 'pairs' | null = null
 
   private drag: { win: Win; ox: number; oy: number } | null = null
+  /** Кнопка заголовка, зажатая мышью: вжимается сразу, срабатывает на отпускание. */
+  private pressedTitle: { win: Win; kind: 'close' | 'min' | 'max' } | null = null
+  /** Последний клик по заголовку: двойной клик разворачивает окно. */
+  private lastTitle = { key: '', at: 0 }
   /** Протяжка внутри окна: выделение текста в блокноте. */
   private appDrag: Win | null = null
   private grain: CanvasPattern | null = null
   private lastMinute = -1
   private pointer = { x: DESKTOP_W / 2, y: DESKTOP_H / 2, over: false }
   private pending: { key: string; end: number } | null = null
-  private toast: { end: number; kind: 'mail' | 'file' } | null = null
+  private toast: { end: number; kind: 'mail' | 'file' | 'note' } | null = null
   private notified = false
   private hasNewMail = false
 
@@ -260,13 +266,15 @@ export class Desktop {
     }
     cctv.onNoteAppend = (line) => this.appendNote(line)
     // Через пять секунд после входа игрок должен понять, что от него хотят.
-    window.setTimeout(() => this.notifyMail(), 5000)
+    window.setTimeout(() => this.notifyMail(), 2000)
   }
 
   // ── жизненный цикл ───────────────────────────────────────────────
 
   tick(): void {
     const now = performance.now()
+
+    if (this.bootActive()) this.dirty = true
 
     // Отладка ?pairs: перескок в конец — она на кухне, Netscape открыт
     // на pairs.local. Слей мини-игру и смотри кино провала.
@@ -376,6 +384,10 @@ export class Desktop {
 
   draw(): void {
     const ctx = this.ctx
+    if (this.bootActive()) {
+      this.drawBoot()
+      return
+    }
     fill(ctx, { x: 0, y: 0, w: DESKTOP_W, h: DESKTOP_H }, C.desk)
     if (this.grain) {
       ctx.fillStyle = this.grain
@@ -670,11 +682,14 @@ export class Desktop {
     ctx.restore()
 
     for (const b of buttons) {
-      panel(ctx, b.r, true, 1)
+      // зажатая кнопка утоплена и знак сдвинут на пиксель — как в оригинале
+      const pressed =
+        this.pressedTitle?.win === win && this.pressedTitle.kind === b.kind
+      panel(ctx, b.r, !pressed, 1)
       ctx.strokeStyle = C.text
       ctx.lineWidth = 1
-      const cx = b.r.x + b.r.w / 2
-      const cy = b.r.y + b.r.h / 2
+      const cx = b.r.x + b.r.w / 2 + (pressed ? 1 : 0)
+      const cy = b.r.y + b.r.h / 2 + (pressed ? 1 : 0)
       ctx.beginPath()
       if (b.kind === 'close') {
         ctx.moveTo(cx - 3, cy - 3)
@@ -725,6 +740,37 @@ export class Desktop {
       { r: max, kind: 'max' },
       { r: close, kind: 'close' },
     ]
+  }
+
+  /** Действие кнопки заголовка: минимизация, разворот или закрытие. */
+  private applyTitleAction(win: Win, kind: 'close' | 'min' | 'max'): void {
+    if (kind === 'close') {
+      this.close(win)
+      return
+    }
+    if (kind === 'min') {
+      win.min = true
+      this.dirty = true
+      this.sound.click()
+      return
+    }
+    if (win.max && win.restore) {
+      const r = win.restore
+      win.x = r.x
+      win.y = r.y
+      win.w = r.w
+      win.h = r.h
+      win.max = false
+    } else {
+      win.restore = { x: win.x, y: win.y, w: win.w, h: win.h }
+      win.x = 0
+      win.y = 0
+      win.w = DESKTOP_W
+      win.h = DESKTOP_H - TASKBAR
+      win.max = true
+    }
+    this.dirty = true
+    this.sound.click()
   }
 
   // ── ярлыки ───────────────────────────────────────────────────────
@@ -820,10 +866,10 @@ export class Desktop {
   private beginInstall(): void {
     if (this.install || this.icons.some((i) => i.id === 'tds')) return
     const now = performance.now()
-    const dlEnd = now + 3200
-    const holdEnd = dlEnd + 1400
-    const fadeEnd = holdEnd + 1800
-    this.install = { start: now, dlEnd, holdEnd, fadeEnd, end: fadeEnd + 2200 }
+    const dlEnd = now + 1500
+    const holdEnd = dlEnd + 800
+    const fadeEnd = holdEnd + 1000
+    this.install = { start: now, dlEnd, holdEnd, fadeEnd, end: fadeEnd + 1100 }
     this.sound.busy()
     this.dirty = true
   }
@@ -1227,7 +1273,26 @@ export class Desktop {
     const ctx = this.ctx
     const { rect, items } = this.menuLayout()
     panel(ctx, rect, true, 2)
-    fill(ctx, { x: rect.x + 2, y: rect.y + 2, w: 20, h: rect.h - 4 }, C.titleOn)
+    // фирменная полоса: тёмно-синий градиент и вертикальное «Windows 2000»
+    const strip: Rect = { x: rect.x + 2, y: rect.y + 2, w: 20, h: rect.h - 4 }
+    const g = ctx.createLinearGradient(strip.x, strip.y + strip.h, strip.x, strip.y)
+    g.addColorStop(0, '#04075f')
+    g.addColorStop(0.8, '#2c3f9e')
+    g.addColorStop(1, '#4a5fc1')
+    ctx.fillStyle = g
+    ctx.fillRect(strip.x, strip.y, strip.w, strip.h)
+    ctx.save()
+    ctx.beginPath()
+    ctx.rect(strip.x, strip.y, strip.w, strip.h)
+    ctx.clip()
+    ctx.translate(strip.x + strip.w / 2, strip.y + strip.h - 8)
+    ctx.rotate(-Math.PI / 2)
+    setFont(ctx, 13, true)
+    ctx.fillStyle = 'rgba(214, 221, 240, 0.9)'
+    ctx.textAlign = 'left'
+    ctx.textBaseline = 'middle'
+    ctx.fillText('Windows 2000', 0, 0)
+    ctx.restore()
     for (const item of items) {
       text(ctx, item.label, item.r.x + 26, item.r.y + 11, { size: 12 })
     }
@@ -1429,6 +1494,54 @@ export class Desktop {
     return { x: DESKTOP_W - 300, y: DESKTOP_H - TASKBAR - 104, w: 292, h: 96 }
   }
 
+  private bootActive(): boolean {
+    return performance.now() < this.bootUntil
+  }
+
+  /** Чёрный экран включения: лого, синяя полоса «Starting up...», бегущие квадраты. */
+  private drawBoot(): void {
+    const ctx = this.ctx
+    const now = performance.now()
+    fill(ctx, { x: 0, y: 0, w: DESKTOP_W, h: DESKTOP_H }, '#000000')
+    text(ctx, 'Microsoft', DESKTOP_W / 2, DESKTOP_H / 2 - 96, {
+      size: 16,
+      color: '#c8c8c0',
+      align: 'center',
+    })
+    text(ctx, 'Windows 2000', DESKTOP_W / 2, DESKTOP_H / 2 - 60, {
+      size: 40,
+      bold: true,
+      color: '#f0f0e8',
+      align: 'center',
+    })
+    text(ctx, 'Professional', DESKTOP_W / 2, DESKTOP_H / 2 - 28, {
+      size: 15,
+      color: '#a8a8a0',
+      align: 'center',
+    })
+
+    // нижняя полоса загрузки: рамка и три бегущих синих квадрата
+    const bandY = DESKTOP_H - 84
+    fill(ctx, { x: 0, y: bandY, w: DESKTOP_W, h: 84 }, '#0a1a5c')
+    fill(ctx, { x: 0, y: bandY, w: DESKTOP_W, h: 2 }, '#3a5ac8')
+    text(ctx, 'Starting up...', 24, bandY + 40, { size: 14, color: '#e8e8e0' })
+    const track = { x: DESKTOP_W / 2 - 70, y: bandY + 58, w: 140, h: 10 }
+    ctx.strokeStyle = '#7a8ad8'
+    ctx.strokeRect(track.x - 2.5, track.y - 2.5, track.w + 5, track.h + 5)
+    const t = (now / 900) % 1
+    for (let i = 0; i < 3; i++) {
+      const p = (t + i / 3) % 1
+      fill(ctx, { x: track.x + p * (track.w - 10), y: track.y, w: 10, h: 10 }, '#4a6ae8')
+    }
+    if (Math.floor(now / 500) % 2 === 0) {
+      text(ctx, 'клик — продолжить', DESKTOP_W - 24, bandY + 40, {
+        size: 10,
+        color: 'rgba(200, 200, 190, 0.5)',
+        align: 'right',
+      })
+    }
+  }
+
   private drawToast(): void {
     if (!this.toast) return
     const ctx = this.ctx
@@ -1441,7 +1554,7 @@ export class Desktop {
     g.addColorStop(1, C.titleOn)
     ctx.fillStyle = g
     ctx.fillRect(bar.x, bar.y, bar.w, bar.h)
-    text(ctx, this.toast.kind === 'file' ? 'Файл' : 'Почта', bar.x + 5, bar.y + 8.5, {
+    text(ctx, this.toast.kind === 'file' ? 'Файл' : this.toast.kind === 'note' ? 'Блокнот' : 'Почта', bar.x + 5, bar.y + 8.5, {
       size: 11,
       bold: true,
       color: C.titleText,
@@ -1556,6 +1669,13 @@ export class Desktop {
     this.pointer.over = true
     this.clickOpen = null
 
+    // Загрузочный экран: любой клик пропускает его.
+    if (this.bootActive()) {
+      this.bootUntil = 0
+      this.dirty = true
+      return
+    }
+
     // Конец демо или смерть: любой клик перезапускает смену.
     if (this.girlDead || this.escaped) {
       location.reload()
@@ -1577,6 +1697,7 @@ export class Desktop {
         this.dirty = true
         if (inside(close, x, y)) this.sound.click()
         else if (kind === 'mail') this.open('mail')
+        else if (kind === 'note') this.openNotepadWith('заметки.txt', this.noteText)
         return
       }
     }
@@ -1653,30 +1774,9 @@ export class Desktop {
         if (inside(b.r, x, y)) {
           this.clearSelection()
           this.raise(win)
-          if (b.kind === 'close') this.close(win)
-          else if (b.kind === 'min') {
-            win.min = true
-            this.dirty = true
-            this.sound.click()
-          } else {
-            if (win.max && win.restore) {
-              const r = win.restore
-              win.x = r.x
-              win.y = r.y
-              win.w = r.w
-              win.h = r.h
-              win.max = false
-            } else {
-              win.restore = { x: win.x, y: win.y, w: win.w, h: win.h }
-              win.x = 0
-              win.y = 0
-              win.w = DESKTOP_W
-              win.h = DESKTOP_H - TASKBAR
-              win.max = true
-            }
-            this.dirty = true
-            this.sound.click()
-          }
+          // как в настоящей винде: кнопка вжимается сразу, срабатывает на отпускании
+          this.pressedTitle = { win, kind: b.kind }
+          this.dirty = true
           return
         }
       }
@@ -1695,6 +1795,13 @@ export class Desktop {
       if (inside(bar, x, y)) {
         this.clearSelection()
         this.raise(win)
+        const now = performance.now()
+        if (this.lastTitle.key === win.key && now - this.lastTitle.at < 450) {
+          this.lastTitle = { key: '', at: 0 }
+          this.applyTitleAction(win, 'max')
+          return
+        }
+        this.lastTitle = { key: win.key, at: now }
         this.drag = { win, ox: x - win.x, oy: y - win.y }
         return
       }
@@ -1766,6 +1873,7 @@ export class Desktop {
     this.pointer.x = x
     this.pointer.y = y
     this.pointer.over = true
+    this.updateCursor(x, y)
 
     if (this.volumeDrag) {
       this.setVolumeAt(y)
@@ -1819,9 +1927,28 @@ export class Desktop {
     this.dirty = true
   }
 
+  /** Системный курсор подсказывает, что край окна можно тянуть. */
+  private updateCursor(x: number, y: number): void {
+    let cur = 'default'
+    if (!this.drag && !this.resizing && !this.iconDrag && !this.appDrag && !this.pressedTitle) {
+      const ordered = this.windows.filter((w) => !w.min).sort((a, b) => b.z - a.z)
+      for (const win of ordered) {
+        if (!inside({ x: win.x, y: win.y, w: win.w, h: win.h }, x, y)) continue
+        const edge = win.max ? null : this.resizeEdge(win, x, y)
+        if (edge === 'e') cur = 'ew-resize'
+        else if (edge === 's') cur = 'ns-resize'
+        else if (edge === 'se') cur = 'nwse-resize'
+        break
+      }
+    } else if (this.resizing) {
+      cur = this.resizing.edge === 'e' ? 'ew-resize' : this.resizing.edge === 's' ? 'ns-resize' : 'nwse-resize'
+    }
+    const canvas = this.ctx.canvas
+    if (canvas.style.cursor !== cur) canvas.style.cursor = cur
+  }
+
   /** Точка клика по ползунку → громкость; за пределами желобка — крайние. */
-  private setVolumeAt(y: number): void {
-    const tr = this.volumeTrack()
+  private setVolumeAt(y: number): void {    const tr = this.volumeTrack()
     const v = 1 - (y - (tr.y + 2)) / (tr.h - 4)
     const next = Math.min(1, Math.max(0, v))
     if (Math.abs(next - this.sound.volume) > 0.001) {
@@ -1839,6 +1966,16 @@ export class Desktop {
 
   pointerUp(): void {
     this.volumeDrag = false
+    // зажатая кнопка заголовка: срабатывает только если мышь не ушла с неё
+    if (this.pressedTitle) {
+      const { win, kind } = this.pressedTitle
+      this.pressedTitle = null
+      this.dirty = true
+      const alive = this.windows.includes(win) && !win.min
+      const btn = alive ? this.titleButtons(win).find((b) => b.kind === kind) : null
+      if (btn && inside(btn.r, this.pointer.x, this.pointer.y)) this.applyTitleAction(win, kind)
+      return
+    }
     if (this.appDrag) {
       this.appDrag.app.release?.()
       this.appDrag = null

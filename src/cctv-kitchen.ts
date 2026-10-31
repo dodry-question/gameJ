@@ -39,6 +39,8 @@ export type Kitchen = {
   printerLed: THREE.Mesh
   /** Фигура маньяка: скрыта, пока не нападёт. */
   maniac: THREE.Group
+  /** Лампа сейчас горит: по гашению она вздрагивает. */
+  readonly lampOn: boolean
   /** Конечности на шарнирах: шаг анимирует cctv. */
   maniacParts: {
     legL: THREE.Group
@@ -555,6 +557,7 @@ export function buildKitchen(scene: THREE.Scene): Kitchen {
   let paperOutT = 0 // 0 убрана → 1 полностью вышла
   let blinkNext = 6 + Math.random() * 10
   let blinkUntil = 0
+  let lampOnNow = true
   const update = (dt: number, time: number): void => {
     // маятник с лёгким дрейфом
     lampPivot.rotation.z = Math.sin(time * 0.9) * 0.16 + Math.sin(time * 0.23) * 0.06
@@ -566,6 +569,7 @@ export function buildKitchen(scene: THREE.Scene): Kitchen {
     }
     const flick = 1 + Math.sin(time * 43) * 0.05
     const on = time > blinkUntil ? 1 : 0
+    lampOnNow = on === 1
     lamp.intensity = 13 * flick * on
     ;(bulb.material as THREE.MeshBasicMaterial).color.setHex(on ? 0xffe9b0 : 0x3a352a)
 
@@ -605,6 +609,9 @@ export function buildKitchen(scene: THREE.Scene): Kitchen {
     printerLed: led,
     maniac,
     maniacParts: { legL, legR, armL, armR, torso, head },
+    get lampOn() {
+      return lampOnNow
+    },
     update,
     setFridgeOpen(open: boolean): void {
       fridgeTarget = open ? 1 : 0

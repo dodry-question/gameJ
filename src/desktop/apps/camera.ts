@@ -17,7 +17,7 @@ type Hit = { r: Rect; fn: () => void }
 type MenuItem = { r: Rect; id: string; action: string; label: string }
 
 /** Сколько идёт «приём» картинки. */
-const REVEAL_MS = 2600
+const REVEAL_MS = 1400
 const FEED_W = 320
 const FEED_H = 240
 

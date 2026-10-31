@@ -233,6 +233,9 @@ export class Cctv {
   private attackPhase = { near: false, touch: false }
   /** Она сейчас пятится спиной вперёд — цикл шага играет задом наперёд. */
   private backpedal = false
+  /** Вздрагивание от погасшей лампы: длится полсекунды. */
+  private flinchUntil = 0
+  private lampPrev = true
   /** Провал случился, пока она ещё не дошла до кухни. */
   private maniacPending = false
   private raycaster = new THREE.Raycaster()
@@ -730,6 +733,12 @@ export class Cctv {
 
     // кухня живёт своей жизнью, даже когда её не смотрят
     this.kitchen.update(dt, this.time)
+    // лампа моргнула — она вздрагивает (только живая, не в кино провала)
+    const lampOn = this.kitchen.lampOn
+    if (this.lampPrev && !lampOn && this.state === 'kitchen' && this.attackT < 0) {
+      this.flinchUntil = this.time + 0.55
+    }
+    this.lampPrev = lampOn
 
     if (this.doorOpen > 0 && this.doorOpen < 1) {
       this.doorOpen = Math.min(1, this.doorOpen + dt * 1.6)
@@ -940,7 +949,7 @@ export class Cctv {
     let vx = (this.targetX - g.position.x) * k
     let vz = (this.targetZ - g.position.z) * k
     const step = Math.hypot(vx, vz)
-    const maxStep = (this.state === 'run' ? 3.4 : 2.4) * dt
+    const maxStep = (this.state === 'run' ? 3.4 : this.task ? 3.2 : 2.4) * dt
     if (step > maxStep) {
       vx *= maxStep / step
       vz *= maxStep / step
@@ -1076,6 +1085,27 @@ export class Cctv {
     if (this.task && this.task.phase === 'act') this.taskPose(p)
     this.gestureDeltas(p, t)
     if (!moving && this.state !== 'knock') this.gazeDeltas(p, t, dt)
+    // страх читается телом: сутулится, руки прижимает, голову прячет
+    if (stress > 0.55 && !this.backpedal && this.attackT < 0) {
+      const k = clamp((stress - 0.55) / 0.45, 0, 1) * (moving ? 0.45 : 1)
+      this.add(p, 'Spine', 0.2 * k, 0, 0)
+      this.add(p, 'Head', 0.16 * k, 0, 0)
+      this.add(p, 'LeftArm', 0.12 * k, 0, 0.3 * k)
+      this.add(p, 'RightArm', 0.12 * k, 0, -0.3 * k)
+      this.add(p, 'LeftForeArm', -0.35 * k, 0, 0)
+      this.add(p, 'RightForeArm', -0.35 * k, 0, 0)
+    }
+    // вздрагивание: короткая зажатая поза с отшатом
+    if (this.time < this.flinchUntil) {
+      const k = 1 - (this.flinchUntil - this.time) / 0.55
+      const j = Math.sin(k * Math.PI)
+      this.add(p, 'Spine', -0.22 * j, 0, 0)
+      this.add(p, 'Head', -0.18 * j, Math.sin(t * 31) * 0.05 * j, 0)
+      this.add(p, 'LeftArm', -0.8 * j, 0, 0.5 * j)
+      this.add(p, 'RightArm', -0.8 * j, 0, -0.5 * j)
+      this.add(p, 'LeftForeArm', -0.9 * j, 0, 0)
+      this.add(p, 'RightForeArm', -0.9 * j, 0, 0)
+    }
     this.tremor(p, t, stress)
     this.addPose(p)
     this.updateWristRopes()

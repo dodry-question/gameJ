@@ -15,8 +15,8 @@ import { TdsMap } from './tds-map'
 import type { HoldState } from './tds-map'
 
 const HEAD = 46
-const HOLD_MS = 2000
-const CONNECT_MS = 1000
+const HOLD_MS = 700
+const CONNECT_MS = 600
 const TIP_MS = 2600
 
 type Screen = 'map' | 'loading' | 'feed'
@@ -37,6 +37,8 @@ export class Tds implements App {
   private feed: CameraFeed
   private sound: Sound
   private hold: { id: string; start: number; x: number; y: number } | null = null
+  /** Отпустил узел раньше конца: достигнутое держится секунду и вернётся. */
+  private resumeHold: { id: string; progress: number; until: number } | null = null
   private connectAt = 0
   private message = ''
   private messageUntil = 0
@@ -168,7 +170,16 @@ export class Tds implements App {
       this.sound.error()
       return
     }
-    this.hold = { id: cam.id, start: performance.now(), x, y }
+    const now = performance.now()
+    const rh = this.resumeHold
+    // микрофальт не сбрасывает удержание: достигнутое вернулось вместе с мышью
+    if (rh && rh.id === cam.id && now <= rh.until) {
+      this.hold = { id: cam.id, start: now - rh.progress * HOLD_MS, x, y }
+      this.resumeHold = null
+      this.sound.click()
+      return
+    }
+    this.hold = { id: cam.id, start: now, x, y }
     this.sound.click()
   }
 
@@ -183,8 +194,11 @@ export class Tds implements App {
 
   release(): void {
     if (!this.hold) return
+    const progress = Math.min(1, (performance.now() - this.hold.start) / HOLD_MS)
+    this.resumeHold =
+      progress >= 0.2 ? { id: this.hold.id, progress, until: performance.now() + 1000 } : null
     this.hold = null
-    this.say('УДЕРЖИВАЙТЕ КАМЕРУ 2 СЕКУНДЫ')
+    this.say('УДЕРЖИВАЙТЕ КАМЕРУ')
   }
 
   /** Клавиша активному окну: TAB на кухне включает скан объектов. */

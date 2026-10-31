@@ -107,6 +107,12 @@ export class LockGame {
   private held: string[] = []
   private lastMove = 0
   private lastTick = 0
+  /** Нажатие, попавшее в гейт частоты: выполняется сразу, как шаг станет возможен. */
+  private buffered: { code: string; at: number } | null = null
+  /** Игрок стоит на сервере: подсветка защиты. */
+  private atBase = false
+  /** Индекс заражённого узла под курсором: он глушит сигналы. */
+  private muting = -1
   private wave = -1 // доля цикла волны, -1 — волны нет
   private frozenUntil = 0
   private sparks: Spark[] = []
@@ -216,8 +222,21 @@ export class LockGame {
     if (this.held.length > 0 && now >= this.lastMove + MOVE_MS) {
       this.tryMove(DIRS[this.held[this.held.length - 1]])
     }
+    // отложенное нажатие: не пропало, а ждало своей очереди
+    if (this.buffered) {
+      if (now - this.buffered.at > 100 || !this.held.includes(this.buffered.code)) {
+        this.buffered = null
+      } else if (now >= this.lastMove + MOVE_MS) {
+        this.tryMove(DIRS[this.buffered.code])
+        this.buffered = null
+      }
+    }
 
-    const atBase = this.player.col === BASE.col && this.player.row === BASE.row
+    this.atBase = this.player.col === BASE.col && this.player.row === BASE.row
+    this.muting = this.infected.findIndex(
+      (n) => n.col === this.player.col && n.row === this.player.row,
+    )
+    const atBase = this.atBase
     const frozen = now < this.frozenUntil
 
     // батарея: медленная подзарядка у сервера
@@ -296,8 +315,11 @@ export class LockGame {
   key(e: KeyboardEvent): boolean {
     const dir = DIRS[e.code]
     if (dir) {
+      if (e.repeat) return true // шаги идут от held-цикла, системный повтор лишний
       if (!this.held.includes(e.code)) this.held.push(e.code)
-      if (this.state === 'run' && performance.now() >= this.lastMove + MOVE_MS) this.tryMove(dir)
+      const now = performance.now()
+      if (this.state === 'run' && now >= this.lastMove + MOVE_MS) this.tryMove(dir)
+      else if (this.state === 'run') this.buffered = { code: e.code, at: now }
       return true
     }
     if (e.code !== 'Space' || e.repeat) return false
@@ -418,7 +440,9 @@ export class LockGame {
 
     this.drawLinks(ctx, ox, oy, step)
     this.drawBase(ctx, ox, oy, step, now)
-    for (const node of this.infected) this.drawInfected(ctx, node, ox, oy, step, now)
+    this.infected.forEach((node, i) =>
+      this.drawInfected(ctx, node, ox, oy, step, now, i === this.muting),
+    )
     for (const imp of this.impulses) this.drawImpulse(ctx, imp, ox, oy, step)
     if (this.state !== 'intro') this.drawPlayer(ctx, ox, oy, step, now)
     if (this.sparks.length > 0) this.drawSparks(ctx)
@@ -503,6 +527,22 @@ export class LockGame {
     ctx.beginPath()
     ctx.arc(cx, cy, ring, 0, Math.PI * 2)
     ctx.stroke()
+    // контракт: стоишь на сервере — видно, что импульсы гасятся здесь
+    if (atBase && this.state === 'run') {
+      const pulse = 0.5 + 0.5 * Math.sin(now / 170)
+      ctx.strokeStyle = `rgba(190, 255, 200, ${(0.25 + pulse * 0.35).toFixed(3)})`
+      ctx.lineWidth = 2
+      ctx.beginPath()
+      ctx.arc(cx, cy, ring + 5 + pulse * 3, 0, Math.PI * 2)
+      ctx.stroke()
+      ctx.lineWidth = 1
+      text(ctx, 'ПОГЛОЩЕНИЕ', cx, cy - ring - 12, {
+        size: 8,
+        bold: true,
+        color: '#c6f0c6',
+        align: 'center',
+      })
+    }
     ctx.lineWidth = 1
     ctx.fillStyle = atBase ? '#1f3a26' : '#13291a'
     ctx.beginPath()
@@ -518,10 +558,31 @@ export class LockGame {
     ctx.textAlign = 'left'
   }
 
-  private drawInfected(ctx: CanvasRenderingContext2D, node: Infected, ox: number, oy: number, step: number, now: number): void {
+  private drawInfected(ctx: CanvasRenderingContext2D, node: Infected, ox: number, oy: number, step: number, now: number, muting = false): void {
     const cx = ox + node.col * step
     const cy = oy + node.row * step
     const blink = Math.floor(now / 500) % 2 === 0 ? 1 : 0.45
+
+    // контракт: курсор на узле — его сигналы заглушены, видно сразу
+    if (muting) {
+      ctx.strokeStyle = '#c6f0c6'
+      ctx.lineWidth = 2
+      ctx.beginPath()
+      ctx.arc(cx, cy, 10, 0, Math.PI * 2)
+      ctx.stroke()
+      ctx.lineWidth = 1
+      ctx.strokeStyle = '#c6f0c6'
+      ctx.beginPath()
+      ctx.moveTo(cx - 6, cy)
+      ctx.lineTo(cx + 6, cy)
+      ctx.stroke()
+      text(ctx, 'ГЛУШИТ', cx, cy - 20, {
+        size: 8,
+        bold: true,
+        color: '#c6f0c6',
+        align: 'center',
+      })
+    }
 
     const glow = ctx.createRadialGradient(cx, cy, 1, cx, cy, 14)
     glow.addColorStop(0, `rgba(212, 64, 46, ${(0.4 * blink).toFixed(3)})`)

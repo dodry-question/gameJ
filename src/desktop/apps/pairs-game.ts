@@ -186,13 +186,16 @@ export class PairsGame {
       })
       this.spawnAt = now + rand(SPAWN_MIN, SPAWN_MAX) * (this.green ? GREEN_SURGE : 1)
     }
-    // падение, ловля и пропуск
+    // падение и ловля: ловим пересечение ловца траекторией бита, поэтому
+    // при просадке кадра бит не проскочит сквозь ловец
     const top = this.fh - CATCHER_H
     const keep: Bit[] = []
     for (const b of this.bits) {
+      const y0 = b.y
       b.y += b.v * dt
       const inLane = Math.abs(b.x - this.cx) <= CATCHER_W / 2 + BIT / 3
-      if (inLane && b.y + BIT / 2 >= top && b.y - BIT / 2 <= this.fh + 4) {
+      const crossed = b.y + BIT / 2 >= top && y0 - BIT / 2 <= this.fh + 4
+      if (inLane && crossed) {
         this.doCatch(b.bit)
         if (this.state !== 'play') return true // перелов: поток повреждён
         continue
