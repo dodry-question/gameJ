@@ -201,6 +201,13 @@ export class Cctv {
   private maniacClip: string | null = null
   /** Реальная скорость девушки, м/с — по ней масштабируется темп шага. */
   private speed = 0
+  /**
+   * Снимок базового слоя (миксера) этого кадра. Процедурные дельты fold-ятся
+   * в него, а не в кость: иначе каждая дельта ложится поверх уже доложенной
+   * прошлым кадром, и поза за секунды уплывает в спираль (голова набок,
+   * корпус горизонтально).
+   */
+  private baseQuat = new Map<string, THREE.Quaternion>()
 
   // ── кухня: команды оператора ──────────────────────────────────────
   /** Текущее поручение: к какому объекту и что делать. */
@@ -638,9 +645,10 @@ export class Cctv {
   }
 
   /**
-   * Дельты поверх текущего поворота кости — то же перенесение в оси комнаты,
-   * что у poseOn, но база не поза покоя, а что миксер уже написал этим кадром.
-   * Так тремор, взгляд и жесты ложатся на мокап, а не затирают его.
+   * Дельты поверх снимка базового слоя этого кадра — то же перенесение в оси
+   * комнаты, что у poseOn, но база не поза покоя, а то, что миксер написал
+   * этим кадром (baseQuat). Так тремор, взгляд и жесты ложатся на мокап,
+   * не затирают его и не накапливаются кадр в кадр.
    */
   private addPoseOn(rig: Rig, p: Pose): void {
     const names = Object.keys(p).sort((a, b) => (rig.depth.get(a) ?? 0) - (rig.depth.get(b) ?? 0))
@@ -653,7 +661,8 @@ export class Cctv {
       this.delta.setFromEuler(this.euler)
       this.tmpB.copy(rig.root.quaternion).invert()
       this.deltaWorld.copy(rig.root.quaternion).multiply(this.delta).multiply(this.tmpB)
-      this.tmpC.copy(bone.quaternion)
+      const base = this.baseQuat.get(name)
+      this.tmpC.copy(base ?? bone.quaternion)
       bone.quaternion
         .copy(parent)
         .invert()
@@ -701,6 +710,45 @@ export class Cctv {
       Math.sin(t * 1.13 + s * 78.2) * 0.3 +
       Math.sin(t * 2.37 + s * 37.7) * 0.2
     )
+  }
+
+  /** Все кости скелета девушки — в позу покоя (база для миксера и дельт). */
+  private resetToRest(): void {
+    for (const [name, bone] of this.bones) {
+      const r = this.rest.get(name)
+      if (r) bone.quaternion.copy(r)
+    }
+  }
+
+  /** Запомнить базовый слой кадра: дельты складываются с ним, не с костью. */
+  private snapshotBase(): void {
+    for (const [name, bone] of this.bones) {
+      let q = this.baseQuat.get(name)
+      if (!q) {
+        q = new THREE.Quaternion()
+        this.baseQuat.set(name, q)
+      }
+      q.copy(bone.quaternion)
+    }
+  }
+
+  /**
+   * Точка блуждания перед стулом: заведомо вынесена за запретный радиус,
+   * иначе она вбегает в зону стула, выталкивается и «убегает назад».
+   */
+  private paceTarget(t: number): { x: number; z: number } {
+    let x = -0.25 + Math.sin(t * 0.42) * 0.62 + this.wob(t * 0.5, 5) * 0.05
+    let z = -0.35 + Math.sin(t * 0.27 + 1.2) * 0.1
+    const dx = x - CHAIR.x
+    const dz = z - CHAIR.z
+    const d = Math.hypot(dx, dz)
+    const min = CHAIR_R + 0.16
+    if (d < min) {
+      const k = min / (d || 1)
+      x = CHAIR.x + dx * k
+      z = CHAIR.z + dz * k
+    }
+    return { x, z }
   }
 
   update(): void {
@@ -950,7 +998,8 @@ export class Cctv {
     let vx = (this.targetX - g.position.x) * k
     let vz = (this.targetZ - g.position.z) * k
     const step = Math.hypot(vx, vz)
-    const maxStep = (this.state === 'run' ? 3.4 : this.task ? 3.2 : 2.4) * dt
+    // брожение спокойное (это прогулка, не бег), поручения — бодрее
+    const maxStep = (this.state === 'run' ? 3.4 : this.task ? 3.2 : this.state === 'pace' ? 1.15 : 2.2) * dt
     if (step > maxStep) {
       vx *= maxStep / step
       vz *= maxStep / step
@@ -960,9 +1009,11 @@ export class Cctv {
     const safe = this.avoidChair(g.position.x, g.position.z)
     g.position.x = safe.x
     g.position.z = safe.z
-    // шаги совпадают с пройденным путём, а не с временем
+    // шаги совпадают с пройденным путём, а не с временем; скорость сглажена —
+    // выталкивание из препятствия больше не дёргает темп клипа
     const moved = Math.hypot(g.position.x - this.prev.x, g.position.z - this.prev.z)
-    this.speed = dt > 0 ? moved / dt : 0
+    const raw = dt > 0 ? moved / dt : 0
+    this.speed += (raw - this.speed) * Math.min(1, dt * 6)
     this.phase += moved * 4.6
     this.prev.set(g.position.x, 0, g.position.z)
   }
@@ -1035,7 +1086,9 @@ export class Cctv {
       return
     }
 
-    const nearTarget = Math.hypot(g.position.x - this.targetX, g.position.z - this.targetZ) < 0.3
+    // Гистерезис с блужданием (там порог 0.35): иначе в зоне 0.3–0.35 флаг
+    // «идёт» дёргается каждый кадр и клипы молотят кроссфейдами.
+    const nearTarget = Math.hypot(g.position.x - this.targetX, g.position.z - this.targetZ) < 0.22
     const walkingTask = !!this.task && this.task.phase === 'walk'
     const moving =
       !this.gesture &&
@@ -1049,10 +1102,11 @@ export class Cctv {
 
     // ── базовый слой: мокап-клип ──────────────────────────────────────
     if (moving) {
-      // в брожении путь слегка неровный, не по линейке
+      // в брожении путь слегка неровный, не по линейке, и всегда вне стула
       if (this.state === 'pace') {
-        this.targetX = -0.25 + Math.sin(t * 0.42) * 0.62 + this.wob(t * 0.5, 5) * 0.05
-        this.targetZ = -0.35 + Math.sin(t * 0.27 + 1.2) * 0.1
+        const pt = this.paceTarget(t)
+        this.targetX = pt.x
+        this.targetZ = pt.z
       }
       // корпус разворачивается туда, куда реально идёт
       const dx = this.targetX - g.position.x
@@ -1061,14 +1115,17 @@ export class Cctv {
     }
     const clip = moving ? (this.state === 'run' ? 'run' : 'walk') : 'idle'
     this.playClip(clip)
-    if (this.mixer) {
+    const action = this.actions.get(clip)
+    const mixerOn = !!this.mixer && !!action && this.activeClip === clip
+    // база кадра: кости в покой, миксер пишет поверх, снимок — до дельт.
+    // Если клип ещё не догрузился, остаёмся в покое: дельты лягут на него,
+    // а не на результат прошлого кадра (иначе — спираль).
+    this.resetToRest()
+    if (mixerOn) {
       // темп шага — от реальной скорости: ступни не скользят по полу
-      const action = this.actions.get(clip)
-      if (action) {
-        const nominal = clip === 'run' ? 3.1 : clip === 'walk' ? 1.5 : 1
-        action.timeScale = clamp(this.speed / nominal, 0.5, 1.9)
-      }
-      this.mixer.update(dt)
+      const nominal = clip === 'run' ? 3.1 : clip === 'walk' ? 1.5 : 1
+      action!.timeScale = clip === 'idle' ? 1 : clamp(this.speed / nominal, 0.5, 1.9)
+      this.mixer!.update(dt)
       // подпрыг корпуса возвращён процедурой: у клипа позиционный трек бёдер
       // вырезан, а фаза шага по-прежнему набегает от пройденного пути
       if (moving) {
@@ -1078,6 +1135,7 @@ export class Cctv {
           this.moveBlend
       }
     }
+    this.snapshotBase()
 
     // ── процедурные слои поверх мокапа: только дельты ─────────────────
     const p: Pose = {}
@@ -1226,8 +1284,9 @@ export class Cctv {
 
     if (this.state === 'pace') {
       // ходит туда-сюда перед стулом; путь слегка неровный, не по линейке
-      this.targetX = -0.25 + Math.sin(t * 0.42) * 0.62 + this.wob(t * 0.5, 5) * 0.05
-      this.targetZ = -0.35 + Math.sin(t * 0.27 + 1.2) * 0.1
+      const pt = this.paceTarget(t)
+      this.targetX = pt.x
+      this.targetZ = pt.z
     }
 
     // Поворот — по направлению реального движения: и в брожении, и в беге.

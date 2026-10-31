@@ -212,6 +212,8 @@ export class Desktop {
   private cineAt = 0
   private offPlayed = false
   private breathStarted = false
+  /** Дыхание и камерная шина уже погашены на входе в кино (один раз). */
+  private cineMuted = false
   /** Сколько строк [!!] терминала уже озвучено ошибкой. */
   private cmdSounds = 0
   /** Загрузочный экран Win2000: играет один раз при старте, клик пропускает. */
@@ -356,9 +358,15 @@ export class Desktop {
     }
     // Дыхание слышно только пока в TDS открыт прямой эфир камеры; в кино
     // провала фоновые шины замолкают навсегда, даже если камера открыта.
+    // Глушим один раз на входе в кино: каждый кадр нельзя — Tds.tick в этом
+    // же кадре успевает включить дыхание обратно, и оно пересоздаётся
+    // по 10–20 нод в секунду с треском.
     if (this.cinematic) {
-      this.sound.setBreathing(null)
-      this.sound.setCameraAudio(false)
+      if (!this.cineMuted) {
+        this.cineMuted = true
+        this.sound.setBreathing(null)
+        this.sound.setCameraAudio(false)
+      }
     } else {
       const cameraOpen = this.windows.some(
         (w) => !w.min && w.app instanceof Tds && w.app.viewingCamera,

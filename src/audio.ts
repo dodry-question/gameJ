@@ -54,10 +54,14 @@ export class Sound {
     master.gain.linearRampToValueAtTime(this.level, t + 0.08)
   }
 
-  /** Вызывать на первом клике: браузеры не дают создать звук раньше. */
-  ensure(): void {
-    if (this.started) return
-    this.started = true
+  constructor() {
+    // Граф и файлы готовим сразу, до первого клика: контекст создаётся
+    // suspended (это легально), эмбиент успевает скачаться, пока игрок
+    // читает экран. По первому клику остаётся только resume().
+    this.buildGraph()
+  }
+
+  private buildGraph(): void {
     try {
       const Ctor = window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
       const ctx = new Ctor()
@@ -90,13 +94,23 @@ export class Sound {
       this.cameraBus()
       this.loadAmbient()
       this.loadModem()
-      this.scheduleModem(28 + Math.random() * 26)
-      this.scheduleSteps(18 + Math.random() * 22)
-      void ctx.resume()
+      this.loadMurzik()
     } catch {
       this.ctx = null
       this.master = null
     }
+  }
+
+  /** Вызывать на первом клике: браузеры не дают включить звук раньше. */
+  ensure(): void {
+    if (!this.ctx) this.buildGraph()
+    if (this.started) return
+    this.started = true
+    const ctx = this.ctx
+    if (!ctx) return
+    this.scheduleModem(28 + Math.random() * 26)
+    this.scheduleSteps(18 + Math.random() * 22)
+    void ctx.resume()
   }
 
   // ── эмбиент комнаты ──────────────────────────────────────────────
@@ -130,9 +144,9 @@ export class Sound {
     src.loop = true
     const g = ctx.createGain()
     const t = ctx.currentTime
-    // тихо и с плавным входом: фон не должен «щёлкать»
+    // тихо и с коротким плавным входом: фон не должен «щёлкать»
     g.gain.setValueAtTime(0.0001, t)
-    g.gain.linearRampToValueAtTime(0.2, t + 2.5)
+    g.gain.linearRampToValueAtTime(0.2, t + 1.2)
     src.connect(g).connect(out)
     src.start(t)
     this.ambientSrc = src
@@ -609,19 +623,7 @@ export class Sound {
     const out = this.master
     if (!ctx || !out) return
     if (!this.murzik) {
-      if (this.murzikLoading) return
-      this.murzikLoading = true
-      fetch('sounds/murzik.ogg')
-        .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error('нет файла'))))
-        .then((b) => ctx.decodeAudioData(b))
-        .then((buf) => {
-          this.murzik = buf
-          this.murzikLoading = false
-          this.playMurzikDread(walkMs)
-        })
-        .catch(() => {
-          this.murzikLoading = false
-        })
+      this.loadMurzik()
       return
     }
     const src = ctx.createBufferSource()
@@ -635,6 +637,23 @@ export class Sound {
     src.connect(g).connect(out)
     src.start(t)
     this.murzikSrc = src
+  }
+
+  /** Мурзик в фоне с самого старта: к провалу файл уже должен играть сразу. */
+  private loadMurzik(): void {
+    const ctx = this.ctx
+    if (!ctx || this.murzik || this.murzikLoading) return
+    this.murzikLoading = true
+    fetch('sounds/murzik.ogg')
+      .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error('нет файла'))))
+      .then((b) => ctx.decodeAudioData(b))
+      .then((buf) => {
+        this.murzik = buf
+        this.murzikLoading = false
+      })
+      .catch(() => {
+        this.murzikLoading = false
+      })
   }
 
   // ── кино провала: тишина, выключение ПК, дыхание ─────────────────

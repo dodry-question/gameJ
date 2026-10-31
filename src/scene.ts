@@ -104,10 +104,10 @@ export class Room {
     const lino = linoleumTexture()
     const wall = new THREE.MeshStandardMaterial({
       map: paper,
-      // слабая самосветимость: обои должны читаться в темноте, иначе комната — чёрный фон
+      // едва заметная самосветимость: комната тонет в темноте, читается монитор
       emissiveMap: paper,
       emissive: 0x6b6250,
-      emissiveIntensity: 0.5,
+      emissiveIntensity: 0.14,
       color: 0x9d968a,
       roughness: 1,
       side: THREE.BackSide,
@@ -115,7 +115,7 @@ export class Room {
     const ceilingMat = new THREE.MeshStandardMaterial({
       color: 0x3f3c36,
       emissive: 0x161411,
-      emissiveIntensity: 0.4,
+      emissiveIntensity: 0.12,
       roughness: 1,
       side: THREE.BackSide,
     })
@@ -123,7 +123,7 @@ export class Room {
       map: lino,
       emissiveMap: lino,
       emissive: 0x3f3328,
-      emissiveIntensity: 0.4,
+      emissiveIntensity: 0.16,
       color: 0x6d655c,
       roughness: 0.85,
       side: THREE.BackSide,
@@ -141,11 +141,11 @@ export class Room {
     walls.position.set(0, 0.45, -1)
     this.scene.add(walls)
 
-    this.scene.add(new THREE.AmbientLight(0x141c26, 0.7))
-    this.scene.add(new THREE.HemisphereLight(0x0e1a22, 0x050505, 0.3))
+    this.scene.add(new THREE.AmbientLight(0x141c26, 0.38))
+    this.scene.add(new THREE.HemisphereLight(0x0e1a22, 0x050505, 0.16))
 
     // лампа где-то над столом, вне кадра: даёт объём комнате
-    const ceiling = new THREE.PointLight(0x6d8ba0, 0.8, 3.6, 2)
+    const ceiling = new THREE.PointLight(0x6d8ba0, 0.5, 3.6, 2)
     ceiling.position.set(-0.2, 1.5, 0.3)
     this.scene.add(ceiling)
 
@@ -192,8 +192,8 @@ export class Room {
     sashH.position.set(-1.12, 0.95, -2.755)
     this.scene.add(sashH)
 
-    // холодный свет с улицы: единственный источник, который не жалко
-    const street = new THREE.PointLight(0x7d9cc4, 0.9, 4.6, 2)
+    // холодный свет с улицы: скупой, только силуэт панели напротив
+    const street = new THREE.PointLight(0x7d9cc4, 0.55, 4.6, 2)
     street.position.set(-1.12, 1.0, -2.45)
     this.scene.add(street)
   }

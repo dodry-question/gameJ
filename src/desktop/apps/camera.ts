@@ -78,7 +78,9 @@ export class CameraFeed {
   setChannel(ch: '04' | '05'): void {
     if (this.channel === ch) return
     this.channel = ch
-    this.cctv?.setView(ch)
+    // cctv ленивый: без первого тика он ещё null, и ракурс не переключится
+    // (в кино провала forceChannel приходит раньше первого тика)
+    ;(this.cctv ?? (this.cctv = getCctv())).setView(ch)
   }
 
   /** Замок снят (в браузере или отладчиком): дверь отпирается. */
