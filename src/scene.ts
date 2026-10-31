@@ -95,6 +95,9 @@ export class Room {
     this.composer.addPass(new OutputPass())
 
     this.resize()
+
+    // Отладочный доступ — для проверки зерна на больших временах (tools/).
+    ;(window as unknown as { __room?: Room }).__room = this
   }
 
   // ── геометрия сцены ──────────────────────────────────────────────
