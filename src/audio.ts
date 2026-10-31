@@ -379,7 +379,7 @@ export class Sound {
     const ctx = this.ctx
     if (!ctx || this.song || this.songLoading) return
     this.songLoading = true
-    fetch('sounds/' + encodeURIComponent('песенка для малыша.ogg'))
+    fetch('sounds/pesenka-dlya-malysha.ogg')
       .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error('нет файла'))))
       .then((b) => ctx.decodeAudioData(b))
       .then((buf) => {
@@ -611,7 +611,7 @@ export class Sound {
     if (!this.murzik) {
       if (this.murzikLoading) return
       this.murzikLoading = true
-      fetch('sounds/' + encodeURIComponent('мурзик.ogg'))
+      fetch('sounds/murzik.ogg')
         .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error('нет файла'))))
         .then((b) => ctx.decodeAudioData(b))
         .then((buf) => {

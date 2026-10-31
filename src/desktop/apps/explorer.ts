@@ -15,6 +15,8 @@ export type DeskFile = {
   folder: string
   name: string
   kind: 'txt' | 'exe' | 'image' | 'audio'
+  /** Реальное имя на диске, если от отображаемого оно отличается (латиница). */
+  file?: string
 }
 
 type Node = { name: string; kind: 'folder' | 'txt' | 'exe' | 'image' | 'audio'; file?: DeskFile }

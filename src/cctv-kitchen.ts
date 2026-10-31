@@ -39,6 +39,15 @@ export type Kitchen = {
   printerLed: THREE.Mesh
   /** Фигура маньяка: скрыта, пока не нападёт. */
   maniac: THREE.Group
+  /** Конечности на шарнирах: шаг анимирует cctv. */
+  maniacParts: {
+    legL: THREE.Group
+    legR: THREE.Group
+    armL: THREE.Group
+    armR: THREE.Group
+    torso: THREE.Mesh
+    head: THREE.Mesh
+  }
   update(dt: number, time: number): void
   /** Открыть/закрыть дверцу холодильника. */
   setFridgeOpen(open: boolean): void
@@ -501,7 +510,7 @@ export function buildKitchen(scene: THREE.Scene): Kitchen {
     { id: 'exit', label: 'ДВЕРЬ', mesh: exitDoor, stand: [0.0, -12.15], yaw: Math.PI },
   ]
 
-  // ── маньяк: тёмная фигура, бросается из проёма при провале ────────
+  // ── маньяк: тёмная фигура, шагает из проёма при провале ───────────
   const maniac = new THREE.Group()
   const maniacMat = new THREE.MeshLambertMaterial({ color: 0x101317 })
   const torso = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.2, 0.62, 7), maniacMat)
@@ -510,30 +519,30 @@ export function buildKitchen(scene: THREE.Scene): Kitchen {
   const head = new THREE.Mesh(new THREE.SphereGeometry(0.11, 8, 6), maniacMat)
   head.position.y = 1.62
   maniac.add(head)
-  for (const [lx, lz] of [
-    [-0.09, 0],
-    [0.09, 0],
-  ]) {
-    const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.05, 0.85, 6), maniacMat)
-    leg.position.set(lx, 0.42, lz)
-    maniac.add(leg)
+  // конечности на шарнирах в бедре и плече: шаг качает их от сустава,
+  // а не вертит вокруг центра цилиндра
+  const limb = (x: number, y: number, zRot: number, len: number, r0: number, r1: number) => {
+    const pivot = new THREE.Group()
+    pivot.position.set(x, y, 0)
+    const mesh = new THREE.Mesh(new THREE.CylinderGeometry(r0, r1, len, 6), maniacMat)
+    mesh.position.y = -len / 2
+    pivot.add(mesh)
+    pivot.rotation.z = zRot
+    maniac.add(pivot)
+    return pivot
   }
-  const armL = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.04, 0.6, 6), maniacMat)
-  armL.position.set(-0.26, 1.2, 0)
-  armL.rotation.z = 0.35
-  maniac.add(armL)
-  const armR = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.04, 0.6, 6), maniacMat)
-  armR.position.set(0.26, 1.25, 0)
-  armR.rotation.z = -0.5
-  maniac.add(armR)
-  // нож в руке
+  const legL = limb(-0.09, 0.85, 0, 0.85, 0.06, 0.05)
+  const legR = limb(0.09, 0.85, 0, 0.85, 0.06, 0.05)
+  const armL = limb(-0.26, 1.5, 0.35, 0.6, 0.05, 0.04)
+  const armR = limb(0.26, 1.5, -0.5, 0.6, 0.05, 0.04)
+  // нож в правой руке — живёт на её шарнире и ходит вместе с шагом
   const mKnife = new THREE.Mesh(
     new THREE.BoxGeometry(0.04, 0.26, 0.02),
     new THREE.MeshLambertMaterial({ color: 0xaeb4ba }),
   )
-  mKnife.position.set(0.34, 1.05, 0.05)
-  mKnife.rotation.z = -0.9
-  maniac.add(mKnife)
+  mKnife.position.set(0.09, -0.35, 0.05)
+  mKnife.rotation.z = -0.4
+  armR.add(mKnife)
   maniac.visible = false
   g.add(maniac)
 
@@ -595,6 +604,7 @@ export function buildKitchen(scene: THREE.Scene): Kitchen {
     paper,
     printerLed: led,
     maniac,
+    maniacParts: { legL, legR, armL, armR, torso, head },
     update,
     setFridgeOpen(open: boolean): void {
       fridgeTarget = open ? 1 : 0

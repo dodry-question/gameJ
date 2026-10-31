@@ -81,7 +81,8 @@ public/favicon.svg
 public/sounds/        — эмбиент, dial-up модем, дыхание героини, скрип пола,
                         нервное мужское дыхание кино провала (breath-man),
                         пасхалки: «песенка для малыша» и «мурзик» (музыка маньяка)
-public/images/        — dodry.jpg, avizero.jpg, Иларион.jpg: пасхалки в «Изображениях»
+public/images/        — dodry.jpg, avizero.jpg, ilarion.jpg: пасхалки в
+                        «Изображениях» (в проводнике зовутся по-русски)
 docs/                 — нетехнические заметки по джему (частично устарели)
 tools/shot.mjs        — скриншот-тест в Edge (только для разработки)
 ```
@@ -139,7 +140,8 @@ tools/shot.mjs        — скриншот-тест в Edge (только для
 ## Деплой на itch.io
 
 1. `npm run build` — пути в билде относительные (`base: './'` в
-   `vite.config.ts`), так что zip работает на itch как есть
+   `vite.config.ts`), все имена файлов латиницей, так что zip работает на
+   itch как есть («must use Latin characters» больше не вылезет)
 2. Заархивировать **содержимое** `dist/` в zip (`index.html` в корне архива)
 3. itch.io → проект → Uploads → HTML5 → загрузить zip → «This file will be
    played in the browser»

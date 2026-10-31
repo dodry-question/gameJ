@@ -1293,7 +1293,8 @@ export class Desktop {
   private openDeskFile(file: DeskFile): void {
     if (file.kind === 'txt') this.openNotepadWith(file.name, DOOR_NOTE)
     else if (file.kind === 'image') {
-      this.pendingImage = file.name
+      // пасхалки лежат на диске латиницей (zip для itch), а называются по-русски
+      this.pendingImage = file.file ?? file.name
       this.open('image')
     } else if (file.kind === 'audio') {
       // пасхалка: мгновенно открываем проигрыватель (грузится и играет в нём)
@@ -1304,10 +1305,10 @@ export class Desktop {
   /** Содержимое папок «Мой компьютер»: растёт по ходу игры. */
   private explorerFiles(): DeskFile[] {
     const files: DeskFile[] = [
-      { folder: 'Музыка', name: 'песенка для малыша.ogg', kind: 'audio' },
+      { folder: 'Музыка', name: 'песенка для малыша.ogg', kind: 'audio', file: 'pesenka-dlya-malysha.ogg' },
       { folder: 'Изображения', name: 'dodry.jpg', kind: 'image' },
       { folder: 'Изображения', name: 'avizero.jpg', kind: 'image' },
-      { folder: 'Изображения', name: 'Иларион.jpg', kind: 'image' },
+      { folder: 'Изображения', name: 'Иларион.jpg', kind: 'image', file: 'ilarion.jpg' },
     ]
     if (this.icons.some((i) => i.id === 'tds')) {
       files.push({ folder: 'Загрузки', name: 'tds.exe', kind: 'exe' })

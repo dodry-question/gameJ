@@ -1263,6 +1263,21 @@ export class Cctv {
     return m && m.visible ? { x: +m.position.x.toFixed(2), z: +m.position.z.toFixed(2) } : null
   }
 
+  /** Мировые Y-повороты корня и костей корпуса — поиск вращения волчком. */
+  debugBones(): Record<string, number> {
+    const out: Record<string, number> = { root: +(this.girl?.rotation.y ?? 0).toFixed(2) }
+    const q = new THREE.Quaternion()
+    const e = new THREE.Euler()
+    for (const name of ['Hips', 'Spine', 'Head', 'LeftUpLeg', 'RightUpLeg']) {
+      const b = this.bones.get(name)
+      if (!b) continue
+      b.getWorldQuaternion(q)
+      e.setFromQuaternion(q, 'YXZ')
+      out[name] = +e.y.toFixed(2)
+    }
+    return out
+  }
+
   maniacAttack(): void {
     if (this.attackT >= 0 || this.state === 'tied') return
     // нападение возможно только на кухне: если она ещё в пути — откладываем
@@ -1464,6 +1479,15 @@ export class Cctv {
     // тяжёлая походка: корпус качается и притопывает
     m.rotation.x = 0.09 + Math.sin(t * 5.6) * 0.05
     m.position.y = Math.abs(Math.sin(t * 5.6)) * 0.035
+    // настоящий шаг: ноги от бедра, руки в противофазе, нож ходит с рукой
+    const p = this.kitchen.maniacParts
+    const cad = t * Math.PI * 2 * 1.5 // полтора шага в секунду
+    p.legL.rotation.x = Math.sin(cad) * 0.5
+    p.legR.rotation.x = Math.sin(cad + Math.PI) * 0.5
+    p.armL.rotation.x = Math.sin(cad + Math.PI) * 0.3
+    p.armR.rotation.x = Math.sin(cad) * 0.22
+    p.torso.rotation.y = Math.sin(cad) * 0.06
+    p.head.rotation.x = Math.sin(cad * 2) * 0.04
 
     const dx = tx - m.position.x
     const dz = tz - m.position.z

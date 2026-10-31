@@ -24,8 +24,8 @@ type Bit = { x: number; y: number; v: number; bit: 0 | 1 }
 const WINDOW = 2 // зелёное окно подписи: цель..цель+2, третье лишнее = красный
 const TARGET_MIN = 15 // цель ловли: случайное 15–23 — сбор долгий
 const TARGET_MAX = 23
-const CATCHER_W = 84 // платформа ловли: вдвое шире прежней
-const CATCHER_H = 52
+const CATCHER_W = 120 // платформа ловли: длинная, но худая, как просили
+const CATCHER_H = 26
 const CATCHER_SPEED = 540 // px/с
 const BIT = 20 // размер чипа с битом
 const FALL_MIN = 320 // скорость падения, px/с
