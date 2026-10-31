@@ -1,13 +1,13 @@
 /**
  * План блока C в терминале TDS: комнаты, коридор, камеры и радар.
  *
- * Планировка повторяет маршрут героини: комната 4 в южном крыле, из неё
- * дверь в коридор, коридор ведёт на север к кухне (комната 5), а из кухни —
- * выходной коридор наружу. Пост охраны и щитовая — в восточном крыле, у
- * каждой комнаты своя дверь. Пока объект в секторе камеры — красная метка
- * горит, после потери медленно гаснет на последнем замеченном месте.
- * Узел 02 (щитовая) мёртв давно и не оживёт; узел 01 и ретранслятор 05
- * ждут подачи питания на power.local.
+ * Планировка повторяет маршрут героини: стартовая комната слева снизу, из
+ * неё проём в центральный коридор; коридор ведёт на север к кухне, а из
+ * кухни выходной коридор уходит наружу за пределы здания. Справа — щитовая
+ * и пост охраны: двери в них закрыты (лист в проёме, прохода нет). У
+ * стартовой комнаты двери нет — просто открытый проём. Узел 02 в щитовой
+ * мёртв давно; узлы 01 и 05 после выпуска героини выглядят рабочими, но без
+ * питания попытка входа кончается ошибкой и адресом щита.
  */
 import { fill, panel, setFont } from '../draw'
 import type { Rect } from '../draw'
@@ -25,24 +25,25 @@ export type Cam = {
 }
 
 export const CAMS: Cam[] = [
-  { id: '01', name: 'ПОСТ ОХРАНЫ', online: false, fx: 0.77, fy: 0.67 },
-  { id: '02', name: 'ЩИТОВАЯ', online: false, fx: 0.77, fy: 0.26 },
+  { id: '01', name: 'ПОСТ ОХРАНЫ', online: false, fx: 0.77, fy: 0.69 },
+  { id: '02', name: 'ЩИТОВАЯ', online: false, fx: 0.77, fy: 0.25 },
   { id: '04', name: 'КОМНАТА 4', online: true, fx: 0, fy: 0 },
-  { id: '05', name: 'КУХНЯ', online: false, fx: 0.17, fy: 0.4 },
+  { id: '05', name: 'КУХНЯ', online: false, fx: 0.23, fy: 0.19 },
 ]
 
-/** Доли комнат внутри рамки здания. */
-const POST_R = { x0: 0.62, y0: 0.52, x1: 0.92, y1: 0.82 }
-const SHIELD_R = { x0: 0.62, y0: 0.14, x1: 0.92, y1: 0.38 }
-const CORRIDOR_R = { x0: 0.3, y0: 0.1, x1: 0.62, y1: 0.9 }
-const ROOM4 = { x0: 0.05, y0: 0.58, x1: 0.3, y1: 0.9 }
-const ROOM5 = { x0: 0.05, y0: 0.14, x1: 0.3, y1: 0.44 }
-const EXIT_R = { x0: 0.12, y0: 0.03, x1: 0.24, y1: 0.14 }
+/** Доли комнат внутри рамки здания (по эскизу планировки). */
+const CORRIDOR_R = { x0: 0.36, y0: 0.16, x1: 0.62, y1: 0.94 }
+const ROOM5 = { x0: 0.1, y0: 0.03, x1: 0.36, y1: 0.36 }
+const EXIT_R = { x0: 0.16, y0: -0.05, x1: 0.3, y1: 0.03 }
+const SHIELD_R = { x0: 0.62, y0: 0.1, x1: 0.92, y1: 0.4 }
+const POST_R = { x0: 0.62, y0: 0.52, x1: 0.92, y1: 0.86 }
+const ROOM4 = { x0: 0.06, y0: 0.52, x1: 0.36, y1: 0.94 }
 
 /** Мировые границы пола комнаты 4. */
 const WORLD = { x0: -3, x1: 3, z0: -3, z1: 2 }
 
 const WALL = '#7e9a84'
+const DOOR = '#a08c5c'
 const INK = '#0b0f0c'
 
 export type HoldState = { id: string; p: number }
@@ -92,35 +93,38 @@ export class TdsMap {
   }
 
   /**
-   * Статус узла: online — в сети; power — камера есть, но линия обесточена
-   * (питание подаётся на power.local); dead — связи нет и не будет.
+   * Как узел выглядит на плане: online — рабочий; power — ждёт питания
+   * (пока героиня привязана); dead — связи нет и не будет.
    */
   status(cam: Cam): 'online' | 'power' | 'dead' {
     const cctv = getCctv()
-    if (cam.id === '01') return cctv.powerReady ? 'online' : 'power'
     if (cam.id === '02') return 'dead'
+    if (cam.id === '01') {
+      if (cctv.powerReady) return 'online'
+      return cctv.girlFreed ? 'online' : 'power'
+    }
     if (cam.id === '05') {
-      if (!cctv.kitchenReady) return 'dead'
-      return cctv.powerReady ? 'online' : 'power'
+      if (cctv.powerReady) return 'online'
+      return cctv.girlFreed ? 'online' : 'dead'
     }
     return cam.online ? 'online' : 'dead'
   }
 
-  /** Узел в сети: 04 всегда после установки, 01 и 05 — после подачи питания. */
+  /** Узел в сети. Для 01 и 05 после выпуска это только видимость. */
   isOnline(cam: Cam): boolean {
     return this.status(cam) === 'online'
   }
 
-  /** Камера жива, но обесточена: попытка входа выдаст ошибку питания. */
-  isPower(cam: Cam): boolean {
-    return this.status(cam) === 'power'
+  /** Камера выглядит рабочей, но подключение кончится ошибкой питания. */
+  needsPower(cam: Cam): boolean {
+    return !getCctv().powerReady && (cam.id === '01' || cam.id === '05')
   }
 
   draw(ctx: CanvasRenderingContext2D, area: Rect, hold: HoldState | null, message: string | null): void {
     this.hits = []
     fill(ctx, area, '#0b0f0c')
 
-    const b: Rect = { x: area.x + 18, y: area.y + 20, w: area.w - 36, h: area.h - 62 }
+    const b: Rect = { x: area.x + 18, y: area.y + 26, w: area.w - 36, h: area.h - 68 }
     this.drawGrid(ctx, b)
 
     const rect = (r: { x0: number; y0: number; x1: number; y1: number }): Rect => ({
@@ -135,7 +139,7 @@ export class TdsMap {
     const room5 = rect(ROOM5)
     const exit = rect(EXIT_R)
 
-    // ── комнаты: сначала полоса выхода, чтобы кухня легла поверх ────
+    // ── комнаты: выходная полоса торчит за северную стену ───────────
     this.room(ctx, b, 'ВЫХОД', EXIT_R, '#0e130e')
     this.room(ctx, b, 'КОМНАТА 5 · КУХНЯ', ROOM5, '#131a14')
     this.room(ctx, b, 'КОРИДОР', CORRIDOR_R, '#101610')
@@ -143,28 +147,30 @@ export class TdsMap {
     this.room(ctx, b, 'ПОСТ ОХРАНЫ', POST_R, '#121812')
     this.room(ctx, b, 'КОМНАТА 4', ROOM4, '#18211a')
 
-    // улица сверху: въезд и забор
+    // улица сверху: за проёмом выхода
     setFont(ctx, 9)
     ctx.fillStyle = 'rgba(126, 154, 132, 0.55)'
     ctx.textAlign = 'center'
-    ctx.fillText('У Л И Ц А', b.x + b.w / 2, b.y - 8)
+    ctx.fillText('У Л И Ц А', b.x + b.w / 2, b.y - 14)
     ctx.textAlign = 'left'
 
-    // выход из здания: разрыв северной стены в полосе выходного коридора
+    // проём в северной стене здания в полосе выхода
     fill(ctx, { x: exit.x + 2, y: b.y - 2, w: exit.w - 4, h: 4 }, INK)
 
-    // ── двери: разрыв в стене + дуга открывания ────────────────────
-    // кухня: дверь в коридор (восточная стена)
-    this.doorV(ctx, room5.x + room5.w, room5.y + room5.h * 0.55, room5.h * 0.34, 1)
-    // выходная дверь кухни: в полосе выхода (северная стена)
-    this.doorH(ctx, room5.x + room5.w * 0.3, room5.y, room5.w * 0.42, 1)
-    // комната 4: дверь в коридор
-    this.doorV(ctx, room4.x + room4.w, room4.y + room4.h * 0.25, room4.h * 0.34, 1)
-    // щитовая и пост: двери в коридор (западные стены)
-    this.doorV(ctx, shield.x, shield.y + shield.h * 0.4, shield.h * 0.36, -1)
-    this.doorV(ctx, post.x, post.y + post.h * 0.35, post.h * 0.34, -1)
+    // ── проёмы и двери ──────────────────────────────────────────────
+    // кухня: открытый проём в коридор (восточная стена)
+    this.gapV(ctx, room5.x + room5.w, room5.y + room5.h * 0.5, room5.h * 0.34)
+    // выходная дверь кухни: проём в северной стене
+    this.gapH(ctx, room5.x + room5.w * 0.28, room5.y, room5.w * 0.44)
+    // стартовая комната: дверь отсутствует — просто открытый проём
+    this.gapV(ctx, room4.x + room4.w, room4.y + room4.h * 0.3, room4.h * 0.32)
+    // щитовая и пост: двери есть, но закрыты — лист в проёме, прохода нет
+    this.gapV(ctx, shield.x, shield.y + shield.h * 0.38, shield.h * 0.34)
+    this.closedDoorV(ctx, shield.x, shield.y + shield.h * 0.38, shield.h * 0.34)
+    this.gapV(ctx, post.x, post.y + post.h * 0.36, post.h * 0.32)
+    this.closedDoorV(ctx, post.x, post.y + post.h * 0.36, post.h * 0.32)
 
-    // стул в комнате 4
+    // стул в стартовой комнате
     const chair = this.worldToMap(-0.6, -0.9, room4, WORLD, { w: 6, h: 5 })
     ctx.strokeStyle = '#a08c5c'
     ctx.strokeRect(chair.x - 4, chair.y - 4, 8, 8)
@@ -204,7 +210,13 @@ export class TdsMap {
       // метка ложится в ту комнату, где её видели
       const gp =
         this.lastSeen.z < KITCHEN.z1
-          ? this.worldToMap(this.lastSeen.x, this.lastSeen.z, room5, { x0: KITCHEN.x0, x1: KITCHEN.x1, z0: -12.8, z1: -9.2 }, { w: KITCHEN.x1 - KITCHEN.x0, h: 3.6 })
+          ? this.worldToMap(
+              this.lastSeen.x,
+              this.lastSeen.z,
+              room5,
+              { x0: KITCHEN.x0, x1: KITCHEN.x1, z0: -12.8, z1: -9.2 },
+              { w: KITCHEN.x1 - KITCHEN.x0, h: 3.6 },
+            )
           : this.worldToMap(this.lastSeen.x, this.lastSeen.z, room4, WORLD, { w: 6, h: 5 })
       ctx.globalAlpha = this.alpha
       ctx.fillStyle = '#d4402e'
@@ -231,7 +243,13 @@ export class TdsMap {
         cy = cp.y
       } else if (cam.id === '05' && cctv.kitchenReady) {
         const c5 = cctv.cam05
-        const p5 = this.worldToMap(c5.pos[0], c5.pos[2], room5, { x0: KITCHEN.x0, x1: KITCHEN.x1, z0: -12.8, z1: -9.2 }, { w: KITCHEN.x1 - KITCHEN.x0, h: 3.6 })
+        const p5 = this.worldToMap(
+          c5.pos[0],
+          c5.pos[2],
+          room5,
+          { x0: KITCHEN.x0, x1: KITCHEN.x1, z0: -12.8, z1: -9.2 },
+          { w: KITCHEN.x1 - KITCHEN.x0, h: 3.6 },
+        )
         cx = p5.x
         cy = p5.y
       } else {
@@ -311,24 +329,19 @@ export class TdsMap {
     ctx.lineWidth = 1
   }
 
-  /** Дверь в вертикальной стене: проём и дуга открывания внутрь коридора. */
-  private doorV(c: CanvasRenderingContext2D, x: number, y: number, h: number, dir: number): void {
-    fill(c, { x: x - 2, y, w: 4, h }, INK)
-    c.strokeStyle = '#c9c2a0'
-    c.beginPath()
-    if (dir > 0) c.arc(x, y, h, -Math.PI / 2, 0)
-    else c.arc(x, y + h, h, 0, Math.PI / 2)
-    c.stroke()
+  /** Проём в вертикальной стене: разрыв, читается как открытая дверь. */
+  private gapV(ctx: CanvasRenderingContext2D, x: number, y: number, h: number): void {
+    fill(ctx, { x: x - 2, y, w: 4, h }, INK)
   }
 
-  /** Дверь в горизонтальной стене: проём и дуга открывания. */
-  private doorH(c: CanvasRenderingContext2D, x: number, y: number, w: number, dir: number): void {
-    fill(c, { x, y: y - 2, w, h: 4 }, INK)
-    c.strokeStyle = '#c9c2a0'
-    c.beginPath()
-    if (dir > 0) c.arc(x, y, w, 0, Math.PI / 2)
-    else c.arc(x + w, y, w, Math.PI / 2, Math.PI)
-    c.stroke()
+  /** Проём в горизонтальной стене. */
+  private gapH(ctx: CanvasRenderingContext2D, x: number, y: number, w: number): void {
+    fill(ctx, { x, y: y - 2, w, h: 4 }, INK)
+  }
+
+  /** Закрытая дверь: лист в проёме — дверь есть, прохода нет. */
+  private closedDoorV(ctx: CanvasRenderingContext2D, x: number, y: number, h: number): void {
+    fill(ctx, { x: x - 1, y: y + 1, w: 2, h: h - 2 }, DOOR)
   }
 
   /**

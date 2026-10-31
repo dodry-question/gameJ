@@ -124,7 +124,7 @@ export class Tds implements App {
     if (this.screen === 'loading' && now >= this.connectAt) {
       // обесточенный узел: вместо картинки — окно ошибки питания
       const cam = CAMS.find((c) => c.id === this.feed.channelNow)
-      if (cam && this.map.isPower(cam)) {
+      if (cam && this.map.needsPower(cam)) {
         this.screen = 'map'
         this.errorBox = {
           title: 'ОШИБКА ПОДКЛЮЧЕНИЯ',
@@ -264,7 +264,7 @@ export class Tds implements App {
     const cam = this.map.hit(x, y)
     if (!cam) return
     if (!this.map.isOnline(cam)) {
-      if (!this.map.isPower(cam)) {
+      if (!this.map.needsPower(cam)) {
         this.say(`КАМЕРА ${cam.id} · НЕТ СВЯЗИ`)
         this.sound.error()
         return

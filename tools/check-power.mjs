@@ -93,6 +93,8 @@ result.won = await page.evaluate(() => window.__power.debugState())
 result.cctvPower = await page.evaluate(() => window.__cctv.powerReady)
 
 // ── 4. Узел 01 в сети: удержание → эфир поста охраны ────────────────
+await page.mouse.click(130, 705) // вкладка TDS в панели задач — поднять окно
+await page.waitForTimeout(400)
 await page.evaluate(() => window.__tds.reset())
 await page.waitForTimeout(400)
 const n1b = await page.evaluate(() => window.__tds.debugInfo().cam01)

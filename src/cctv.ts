@@ -527,6 +527,11 @@ export class Cctv {
     return this.state === 'toKitchen' || this.state === 'kitchen'
   }
 
+  /** Её уже выпустили: камеры 01 и 05 начинают выглядеть рабочими. */
+  get girlFreed(): boolean {
+    return this.state !== 'tied'
+  }
+
   /**
    * Питание линий камер: до победы на power.local узел 01 мёртв, узел 05
    * не подключается (ретранслятор обесточен), даже когда она уже в кухне.
