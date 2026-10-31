@@ -414,6 +414,52 @@ export class Sound {
     }
   }
 
+  private tuneOsc: OscillatorNode | null = null
+  private tuneGain: GainNode | null = null
+
+  /**
+   * Настройочный тон щита: тонкий зум, который следует за ползунком, пока
+   * его тянут. null — отпустили, тон гаснет. Частота честно отвечает мыши.
+   */
+  tuneTone(freq: number | null): void {
+    if (this.deadAir) return
+    const ctx = this.ctx
+    if (!ctx || !this.master) return
+    const t = ctx.currentTime
+    if (freq === null) {
+      const g = this.tuneGain
+      const osc = this.tuneOsc
+      if (g && osc) {
+        g.gain.cancelScheduledValues(t)
+        g.gain.setValueAtTime(Math.max(g.gain.value, 0.0001), t)
+        g.gain.exponentialRampToValueAtTime(0.0001, t + 0.12)
+        window.setTimeout(() => {
+          try {
+            osc.stop()
+          } catch {
+            // уже остановлен
+          }
+        }, 160)
+      }
+      this.tuneOsc = null
+      this.tuneGain = null
+      return
+    }
+    if (!this.tuneOsc) {
+      const osc = ctx.createOscillator()
+      const g = ctx.createGain()
+      osc.type = 'sine'
+      g.gain.value = 0.0001
+      osc.connect(g).connect(this.master)
+      osc.start(t)
+      this.tuneOsc = osc
+      this.tuneGain = g
+    }
+    this.tuneOsc.frequency.setTargetAtTime(freq, t, 0.025)
+    this.tuneGain!.gain.cancelScheduledValues(t)
+    this.tuneGain!.gain.setTargetAtTime(0.05, t, 0.03)
+  }
+
   // ── пасхалка «Музыка» ────────────────────────────────────────────
 
   private song: AudioBuffer | null = null

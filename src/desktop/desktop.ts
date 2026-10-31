@@ -227,8 +227,6 @@ export class Desktop {
   private cineMuted = false
   /** Отладка ?power уже отработала. */
   private debugPowerDone = false
-  /** Сколько раз игрок кликал обесточенный узел: блокнот раскроется один раз. */
-  private powerHints = 0
   /** Сколько строк [!!] терминала уже озвучено ошибкой. */
   private cmdSounds = 0
   /** Загрузочный экран Win2000: играет один раз при старте, клик пропускает. */
@@ -1621,16 +1619,16 @@ export class Desktop {
   }
 
   /**
-   * Клик по обесточенному узлу в TDS: адрес панели питания уходит в буфер,
-   * в заметки пишется строка. Блокнот раскрывается только на первую
-   * подсказку — дальше адрес и так висит в сообщении терминала.
+   * Окно ошибки питания закрыто: адрес щита в буфер, а героиня записывает
+   * его в заметки — блокнот открывается сам, без подсказок интерфейса.
    */
   private powerHint(): void {
     writeClipboard('http://power.local/')
-    this.powerHints++
-    if (this.powerHints === 1) {
-      this.appendNote('Питание линий камер: панель http://power.local — релейный щит 3B')
+    if (this.noteText && this.noteText.includes('power.local')) {
+      this.openNotepadWith('заметки.txt', this.noteText)
+      return
     }
+    this.appendNote('http://power.local/ — мне нужно починить электросеть')
   }
 
   /** Кино провала: зритель смотрит камеру 05, окно терминала залочено. */
@@ -2307,12 +2305,13 @@ export class Desktop {
 
   /** Отладка для tools/: открыть TDS сразу с живым кадром, без письма и вируса. */
   debugOpenCamera(): void {
-    // отладка = вся история уже прошла: гейты игровых узлов тоже открыты
+    // отладка = вся история уже прошла: гейты игровых узлов тоже открыты.
+    // Питание линий тут не трогаем: его задаёт отдельный флаг ?power.
     this.cameraAccess = true
-    getCctv().powerOn()
     const app = new Tds(this.sound)
     app.setAccess(true)
     app.onDoorRequest = () => this.openDoorNote()
+    app.onPowerHint = () => this.powerHint()
     if (this.doorUnlocked) app.doorOpened()
     this.cache.set('tds', app)
     this.spawn('tds')

@@ -11,7 +11,7 @@ import type { App } from '../app'
 import type { Sound } from '../../audio'
 import { getCctv } from '../../cctv'
 import { CameraFeed } from './camera'
-import { TdsMap } from './tds-map'
+import { TdsMap, CAMS } from './tds-map'
 import type { HoldState } from './tds-map'
 
 const HEAD = 46
@@ -46,6 +46,8 @@ export class Tds implements App {
   private messageUntil = 0
   private firstViewed = false
   private backRect: Rect | null = null
+  /** Окно ошибки после попытки входа в обесточенную камеру. */
+  private errorBox: { title: string; lines: string[] } | null = null
 
   constructor(sound: Sound) {
     this.sound = sound
@@ -94,15 +96,23 @@ export class Tds implements App {
   /** Состояние экрана и точки узлов — для проверок из tools/. */
   debugInfo(): {
     screen: Screen
+    channel: string
     cam: { x: number; y: number } | null
+    cam01: { x: number; y: number } | null
     cam05: { x: number; y: number } | null
     door: boolean
+    error: boolean
+    feed: { x: number; y: number; w: number; h: number } | null
   } {
     return {
       screen: this.screen,
+      channel: this.feed.channelNow,
       cam: this.map.point('04'),
+      cam01: this.map.point('01'),
       cam05: this.map.point('05'),
       door: this.feed.releasedGirl,
+      error: this.errorBox !== null,
+      feed: this.feed.debugRect(),
     }
   }
 
@@ -112,12 +122,27 @@ export class Tds implements App {
     const now = performance.now()
 
     if (this.screen === 'loading' && now >= this.connectAt) {
-      this.screen = 'feed'
-      this.feed.start()
-      this.sound.open()
-      if (!this.firstViewed) {
-        this.firstViewed = true
-        this.onFirstView?.()
+      // обесточенный узел: вместо картинки — окно ошибки питания
+      const cam = CAMS.find((c) => c.id === this.feed.channelNow)
+      if (cam && this.map.isPower(cam)) {
+        this.screen = 'map'
+        this.errorBox = {
+          title: 'ОШИБКА ПОДКЛЮЧЕНИЯ',
+          lines: [
+            'НЕТ ПИТАНИЯ',
+            'линия камеры обесточена.',
+            'подайте питание с релейного щита.',
+          ],
+        }
+        this.sound.error()
+      } else {
+        this.screen = 'feed'
+        this.feed.start()
+        this.sound.open()
+        if (!this.firstViewed) {
+          this.firstViewed = true
+          this.onFirstView?.()
+        }
       }
     }
 
@@ -152,9 +177,80 @@ export class Tds implements App {
     } else {
       this.feed.draw(ctx, area)
     }
+
+    // окно ошибки перекрывает всё содержимое терминала
+    if (this.errorBox) this.drawErrorBox(ctx, area)
+  }
+
+  /** Модальное окно ошибки в духе Win2000: любой клик его закрывает. */
+  private drawErrorBox(ctx: CanvasRenderingContext2D, area: Rect): void {
+    const box = this.errorBox!
+    const w = 268
+    const h = 128
+    const x = area.x + (area.w - w) / 2
+    const y = area.y + (area.h - h) / 2
+    // затемнение фона
+    ctx.fillStyle = 'rgba(8, 10, 9, 0.45)'
+    ctx.fillRect(area.x, area.y, area.w, area.h)
+
+    panel(ctx, { x, y, w, h }, true, 2)
+    // синяя шапка с заголовком
+    const head: Rect = { x: x + 3, y: y + 3, w: w - 6, h: 18 }
+    fill(ctx, head, '#0a246a')
+    ctx.fillStyle = '#ffffff'
+    setFont(ctx, 11, true)
+    ctx.textBaseline = 'middle'
+    ctx.fillText(box.title, head.x + 8, head.y + head.h / 2 + 1)
+    // крестик в шапке
+    ctx.strokeStyle = '#ffffff'
+    ctx.strokeRect(head.x + head.w - 16, head.y + 3, 12, 12)
+    ctx.textBaseline = 'alphabetic'
+
+    // красный круг с крестом
+    const icx = x + 34
+    const icy = y + 52
+    ctx.fillStyle = '#c0392b'
+    ctx.beginPath()
+    ctx.arc(icx, icy, 13, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.strokeStyle = '#ffffff'
+    ctx.lineWidth = 2
+    ctx.beginPath()
+    ctx.moveTo(icx - 6, icy - 6)
+    ctx.lineTo(icx + 6, icy + 6)
+    ctx.moveTo(icx + 6, icy - 6)
+    ctx.lineTo(icx - 6, icy + 6)
+    ctx.stroke()
+    ctx.lineWidth = 1
+
+    setFont(ctx, 11)
+    ctx.fillStyle = '#101210'
+    let ty = y + 40
+    for (const line of box.lines) {
+      ctx.fillText(line, x + 58, ty)
+      ty += 16
+    }
+
+    // кнопка ОК
+    const ok: Rect = { x: x + w / 2 - 35, y: y + h - 32, w: 70, h: 22 }
+    panel(ctx, ok, true, 2)
+    setFont(ctx, 11, true)
+    ctx.fillStyle = '#101210'
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillText('ОК', ok.x + ok.w / 2, ok.y + ok.h / 2 + 1)
+    ctx.textAlign = 'left'
+    ctx.textBaseline = 'alphabetic'
   }
 
   click(x: number, y: number, r: Rect): void {
+    // окно ошибки закрывает любой клик; за ним рабочий стол раскрывает блокнот
+    if (this.errorBox) {
+      this.errorBox = null
+      this.sound.click()
+      this.onPowerHint?.()
+      return
+    }
     if (this.backRect && inside(this.backRect, x, y)) {
       this.backToMap()
       return
@@ -168,20 +264,13 @@ export class Tds implements App {
     const cam = this.map.hit(x, y)
     if (!cam) return
     if (!this.map.isOnline(cam)) {
-      if (this.map.isPower(cam)) {
-        // камера есть, но линия обесточена: подсказываем панель питания
-        this.say(
-          cam.id === '01'
-            ? 'КАМЕРА 01 · ЛИНИЯ ОБЕСТОЧЕНА · ПАНЕЛЬ: power.local'
-            : 'РЕТРАНСЛЯТОР ОБЕСТОЧЕН · ПИТАНИЕ: power.local',
-        )
-        this.sound.error()
-        this.onPowerHint?.()
-      } else {
+      if (!this.map.isPower(cam)) {
         this.say(`КАМЕРА ${cam.id} · НЕТ СВЯЗИ`)
         this.sound.error()
+        return
       }
-      return
+      // камера есть, но линия обесточена: попытка входа закончится ошибкой
+      this.say('ЛИНИЯ ОБЕСТОЧЕНА · УДЕРЖИВАЙТЕ УЗЕЛ ДЛЯ ПОПЫТКИ')
     }
     const now = performance.now()
     const rh = this.resumeHold

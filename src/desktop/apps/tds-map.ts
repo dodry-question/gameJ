@@ -1,15 +1,19 @@
 /**
  * План блока C в терминале TDS: комнаты, коридор, камеры и радар.
  *
- * Пока объект в секторе камеры 04 — красная метка горит, после потери она
- * медленно гаснет на последнем замеченном месте. Узел 01 (пост охраны)
- * оживает после подачи питания на power.local; узел 05 — когда девушка
- * дойдёт до кухни и линия под напряжением. Узлы 02–03 — антураж.
+ * Планировка повторяет маршрут героини: комната 4 в южном крыле, из неё
+ * дверь в коридор, коридор ведёт на север к кухне (комната 5), а из кухни —
+ * выходной коридор наружу. Пост охраны и щитовая — в восточном крыле, у
+ * каждой комнаты своя дверь. Пока объект в секторе камеры — красная метка
+ * горит, после потери медленно гаснет на последнем замеченном месте.
+ * Узел 02 (щитовая) мёртв давно и не оживёт; узел 01 и ретранслятор 05
+ * ждут подачи питания на power.local.
  */
 import { fill, panel, setFont } from '../draw'
 import type { Rect } from '../draw'
 import { getCctv } from '../../cctv'
 import { KITCHEN } from '../../cctv-kitchen'
+import { POST } from '../../cctv-post'
 
 export type Cam = {
   id: string
@@ -21,21 +25,22 @@ export type Cam = {
 }
 
 export const CAMS: Cam[] = [
-  { id: '01', name: 'ПОСТ ОХРАНЫ', online: false, fx: 0.14, fy: 0.6 },
-  { id: '02', name: 'КОРИДОР', online: false, fx: 0.44, fy: 0.19 },
-  { id: '03', name: 'ЛЕСТНИЦА', online: false, fx: 0.91, fy: 0.43 },
+  { id: '01', name: 'ПОСТ ОХРАНЫ', online: false, fx: 0.77, fy: 0.67 },
+  { id: '02', name: 'ЩИТОВАЯ', online: false, fx: 0.77, fy: 0.26 },
   { id: '04', name: 'КОМНАТА 4', online: true, fx: 0, fy: 0 },
-  { id: '05', name: 'КУХНЯ', online: false, fx: 0.7, fy: 0.44 },
+  { id: '05', name: 'КУХНЯ', online: false, fx: 0.17, fy: 0.4 },
 ]
 
-/** Доли комнаты 4 внутри здания; по ним мир камеры ложится на план. */
-const ROOM4 = { fx: 0.3, fy: 0.3, fw: 0.28, fh: 0.48 }
+/** Доли комнат внутри рамки здания. */
+const POST_R = { x0: 0.62, y0: 0.52, x1: 0.92, y1: 0.82 }
+const SHIELD_R = { x0: 0.62, y0: 0.14, x1: 0.92, y1: 0.38 }
+const CORRIDOR_R = { x0: 0.3, y0: 0.1, x1: 0.62, y1: 0.9 }
+const ROOM4 = { x0: 0.05, y0: 0.58, x1: 0.3, y1: 0.9 }
+const ROOM5 = { x0: 0.05, y0: 0.14, x1: 0.3, y1: 0.44 }
+const EXIT_R = { x0: 0.12, y0: 0.03, x1: 0.24, y1: 0.14 }
 
 /** Мировые границы пола комнаты 4. */
 const WORLD = { x0: -3, x1: 3, z0: -3, z1: 2 }
-
-/** Кухня (комната 5): блок на плане и мировые границы пола. */
-const ROOM5 = { fx: 0.58, fy: 0.3, fw: 0.24, fh: 0.26 }
 
 const WALL = '#7e9a84'
 const INK = '#0b0f0c'
@@ -93,6 +98,7 @@ export class TdsMap {
   status(cam: Cam): 'online' | 'power' | 'dead' {
     const cctv = getCctv()
     if (cam.id === '01') return cctv.powerReady ? 'online' : 'power'
+    if (cam.id === '02') return 'dead'
     if (cam.id === '05') {
       if (!cctv.kitchenReady) return 'dead'
       return cctv.powerReady ? 'online' : 'power'
@@ -105,7 +111,7 @@ export class TdsMap {
     return this.status(cam) === 'online'
   }
 
-  /** Камера жива, но обесточена: клик подскажет про power.local. */
+  /** Камера жива, но обесточена: попытка входа выдаст ошибку питания. */
   isPower(cam: Cam): boolean {
     return this.status(cam) === 'power'
   }
@@ -114,106 +120,92 @@ export class TdsMap {
     this.hits = []
     fill(ctx, area, '#0b0f0c')
 
-    const b: Rect = { x: area.x + 18, y: area.y + 14, w: area.w - 36, h: area.h - 56 }
+    const b: Rect = { x: area.x + 18, y: area.y + 20, w: area.w - 36, h: area.h - 62 }
     this.drawGrid(ctx, b)
 
-    const room4 = {
-      x: b.x + ROOM4.fx * b.w,
-      y: b.y + ROOM4.fy * b.h,
-      w: ROOM4.fw * b.w,
-      h: ROOM4.fh * b.h,
-    }
-    const room5 = {
-      x: b.x + ROOM5.fx * b.w,
-      y: b.y + ROOM5.fy * b.h,
-      w: ROOM5.fw * b.w,
-      h: ROOM5.fh * b.h,
-    }
+    const rect = (r: { x0: number; y0: number; x1: number; y1: number }): Rect => ({
+      x: b.x + r.x0 * b.w,
+      y: b.y + r.y0 * b.h,
+      w: (r.x1 - r.x0) * b.w,
+      h: (r.y1 - r.y0) * b.h,
+    })
+    const post = rect(POST_R)
+    const shield = rect(SHIELD_R)
+    const room4 = rect(ROOM4)
+    const room5 = rect(ROOM5)
+    const exit = rect(EXIT_R)
 
-    // ── комнаты ─────────────────────────────────────────────────────
-    this.room(ctx, b, 'КОРИДОР', 0, 0.08, 1, 0.3, '#101610')
-    this.room(ctx, b, 'ХОЛЛ', 0, 0.3, 0.3, 0.86, '#131a14')
-    this.room(ctx, b, 'КОМНАТА 4', ROOM4.fx, ROOM4.fy, ROOM4.fx + ROOM4.fw, ROOM4.fy + ROOM4.fh, '#18211a')
-    this.room(ctx, b, 'КОМНАТА 5 · КУХНЯ', 0.58, 0.3, 0.82, 0.56, '#131a14')
-    this.room(ctx, b, 'ЛЕСТНИЦА', 0.82, 0.3, 1, 0.56, '#111711')
-    this.room(ctx, b, 'СКЛАД', 0.3, 0.78, 0.82, 1, '#121812')
-    this.room(ctx, b, 'ЩИТОВАЯ', 0.82, 0.56, 1, 1, '#101510')
+    // ── комнаты: сначала полоса выхода, чтобы кухня легла поверх ────
+    this.room(ctx, b, 'ВЫХОД', EXIT_R, '#0e130e')
+    this.room(ctx, b, 'КОМНАТА 5 · КУХНЯ', ROOM5, '#131a14')
+    this.room(ctx, b, 'КОРИДОР', CORRIDOR_R, '#101610')
+    this.room(ctx, b, 'ЩИТОВАЯ', SHIELD_R, '#101510')
+    this.room(ctx, b, 'ПОСТ ОХРАНЫ', POST_R, '#121812')
+    this.room(ctx, b, 'КОМНАТА 4', ROOM4, '#18211a')
 
-    // ступени
-    ctx.strokeStyle = 'rgba(126, 154, 132, 0.45)'
-    ctx.lineWidth = 1
-    for (let i = 1; i <= 4; i++) {
-      const y = b.y + 0.3 * b.h + ((0.26 * b.h) / 5) * i
-      ctx.beginPath()
-      ctx.moveTo(b.x + 0.84 * b.w, y)
-      ctx.lineTo(b.x + 0.98 * b.w, y)
-      ctx.stroke()
-    }
+    // улица сверху: въезд и забор
+    setFont(ctx, 9)
+    ctx.fillStyle = 'rgba(126, 154, 132, 0.55)'
+    ctx.textAlign = 'center'
+    ctx.fillText('У Л И Ц А', b.x + b.w / 2, b.y - 8)
+    ctx.textAlign = 'left'
 
-    // дверь комнаты 4: проём в стене коридора и дуга открывания
-    const doorL = room4.x + ((-0.6 - WORLD.x0) / (WORLD.x1 - WORLD.x0)) * room4.w
-    const doorR = room4.x + ((0.6 - WORLD.x0) / (WORLD.x1 - WORLD.x0)) * room4.w
-    fill(ctx, { x: doorL, y: room4.y - 2, w: doorR - doorL, h: 4 }, INK)
-    ctx.strokeStyle = '#c9c2a0'
-    ctx.beginPath()
-    ctx.arc(doorL, room4.y, doorR - doorL, 0, Math.PI / 2)
-    ctx.stroke()
+    // выход из здания: разрыв северной стены в полосе выходного коридора
+    fill(ctx, { x: exit.x + 2, y: b.y - 2, w: exit.w - 4, h: 4 }, INK)
 
-    // дверь в кухню: проём в верхней стене комнаты 5 — вход из коридора
-    const door5L = room5.x + 0.34 * room5.w
-    const door5R = room5.x + 0.66 * room5.w
-    fill(ctx, { x: door5L, y: room5.y - 2, w: door5R - door5L, h: 4 }, INK)
-    ctx.strokeStyle = '#c9c2a0'
-    ctx.beginPath()
-    ctx.arc(door5L, room5.y, door5R - door5L, 0, Math.PI / 2)
-    ctx.stroke()
+    // ── двери: разрыв в стене + дуга открывания ────────────────────
+    // кухня: дверь в коридор (восточная стена)
+    this.doorV(ctx, room5.x + room5.w, room5.y + room5.h * 0.55, room5.h * 0.34, 1)
+    // выходная дверь кухни: в полосе выхода (северная стена)
+    this.doorH(ctx, room5.x + room5.w * 0.3, room5.y, room5.w * 0.42, 1)
+    // комната 4: дверь в коридор
+    this.doorV(ctx, room4.x + room4.w, room4.y + room4.h * 0.25, room4.h * 0.34, 1)
+    // щитовая и пост: двери в коридор (западные стены)
+    this.doorV(ctx, shield.x, shield.y + shield.h * 0.4, shield.h * 0.36, -1)
+    this.doorV(ctx, post.x, post.y + post.h * 0.35, post.h * 0.34, -1)
 
-    // стул
-    const chair = this.worldToMap(-0.6, -0.9, room4)
+    // стул в комнате 4
+    const chair = this.worldToMap(-0.6, -0.9, room4, WORLD, { w: 6, h: 5 })
     ctx.strokeStyle = '#a08c5c'
     ctx.strokeRect(chair.x - 4, chair.y - 4, 8, 8)
 
-    // ── сектор камеры 04 и радар ────────────────────────────────────
     const cctv = getCctv()
-    const v = cctv.cam
-    const cp = this.worldToMap(v.pos[0], v.pos[2], room4)
-    const ca = this.worldToMap(v.at[0], v.at[2], room4)
-    const ang = Math.atan2(ca.y - cp.y, ca.x - cp.x)
-    const half = ((v.fov / 2) * Math.PI) / 180
-    const len = Math.max(60, room4.w * 0.9)
-    ctx.fillStyle = 'rgba(140, 220, 150, 0.12)'
-    ctx.beginPath()
-    ctx.moveTo(cp.x, cp.y)
-    ctx.lineTo(cp.x + Math.cos(ang - half) * len, cp.y + Math.sin(ang - half) * len)
-    ctx.lineTo(cp.x + Math.cos(ang) * len, cp.y + Math.sin(ang) * len)
-    ctx.lineTo(cp.x + Math.cos(ang + half) * len, cp.y + Math.sin(ang + half) * len)
-    ctx.closePath()
-    ctx.fill()
 
-    // ── сектор камеры 05 (кухня): узел стоит там, где камера ─────────
+    // ── секторы камер: жёстко обрезаны по своей комнате ─────────────
+    this.sector(ctx, cctv.cam.pos, cctv.cam.at, cctv.cam.fov, room4, room4, { w: 6, h: 5 }, WORLD, 0.85)
     if (cctv.kitchenReady) {
-      const c5 = cctv.cam05
-      const p5 = this.worldToMap5(c5.pos[0], c5.pos[2], room5)
-      const a5 = this.worldToMap5(c5.at[0], c5.at[2], room5)
-      const ang5 = Math.atan2(a5.y - p5.y, a5.x - p5.x)
-      const half5 = ((c5.fov / 2) * Math.PI) / 180
-      const len5 = Math.max(46, room5.w * 1.3)
-      ctx.fillStyle = 'rgba(140, 220, 150, 0.1)'
-      ctx.beginPath()
-      ctx.moveTo(p5.x, p5.y)
-      ctx.lineTo(p5.x + Math.cos(ang5 - half5) * len5, p5.y + Math.sin(ang5 - half5) * len5)
-      ctx.lineTo(p5.x + Math.cos(ang5) * len5, p5.y + Math.sin(ang5) * len5)
-      ctx.lineTo(p5.x + Math.cos(ang5 + half5) * len5, p5.y + Math.sin(ang5 + half5) * len5)
-      ctx.closePath()
-      ctx.fill()
+      this.sector(
+        ctx,
+        cctv.cam05.pos,
+        cctv.cam05.at,
+        cctv.cam05.fov,
+        room5,
+        room5,
+        { w: KITCHEN.x1 - KITCHEN.x0, h: 3.6 },
+        { x0: KITCHEN.x0, x1: KITCHEN.x1, z0: -12.8, z1: -9.2 },
+        1.0,
+      )
+    }
+    if (cctv.powerReady) {
+      this.sector(
+        ctx,
+        cctv.cam01.pos,
+        cctv.cam01.at,
+        cctv.cam01.fov,
+        post,
+        post,
+        { w: POST.x1 - POST.x0, h: POST.z1 - POST.z0 },
+        { x0: POST.x0, x1: POST.x1, z0: POST.z0, z1: POST.z1 },
+        1.15,
+      )
     }
 
     if (this.lastSeen && this.alpha > 0) {
       // метка ложится в ту комнату, где её видели
       const gp =
         this.lastSeen.z < KITCHEN.z1
-          ? this.worldToMap5(this.lastSeen.x, this.lastSeen.z, room5)
-          : this.worldToMap(this.lastSeen.x, this.lastSeen.z, room4)
+          ? this.worldToMap(this.lastSeen.x, this.lastSeen.z, room5, { x0: KITCHEN.x0, x1: KITCHEN.x1, z0: -12.8, z1: -9.2 }, { w: KITCHEN.x1 - KITCHEN.x0, h: 3.6 })
+          : this.worldToMap(this.lastSeen.x, this.lastSeen.z, room4, WORLD, { w: 6, h: 5 })
       ctx.globalAlpha = this.alpha
       ctx.fillStyle = '#d4402e'
       ctx.beginPath()
@@ -234,12 +226,12 @@ export class TdsMap {
       let cx: number
       let cy: number
       if (cam.id === '04') {
+        const cp = this.worldToMap(cctv.cam.pos[0], cctv.cam.pos[2], room4, WORLD, { w: 6, h: 5 })
         cx = cp.x
         cy = cp.y
       } else if (cam.id === '05' && cctv.kitchenReady) {
-        // узел 05 стоит там, где висит камера кухни — как узел 04
         const c5 = cctv.cam05
-        const p5 = this.worldToMap5(c5.pos[0], c5.pos[2], room5)
+        const p5 = this.worldToMap(c5.pos[0], c5.pos[2], room5, { x0: KITCHEN.x0, x1: KITCHEN.x1, z0: -12.8, z1: -9.2 }, { w: KITCHEN.x1 - KITCHEN.x0, h: 3.6 })
         cx = p5.x
         cy = p5.y
       } else {
@@ -296,28 +288,84 @@ export class TdsMap {
     ctx: CanvasRenderingContext2D,
     b: Rect,
     label: string,
-    x0: number,
-    y0: number,
-    x1: number,
-    y1: number,
+    r: { x0: number; y0: number; x1: number; y1: number },
     color: string,
   ): void {
-    const r: Rect = {
-      x: b.x + x0 * b.w,
-      y: b.y + y0 * b.h,
-      w: (x1 - x0) * b.w,
-      h: (y1 - y0) * b.h,
+    const rect: Rect = {
+      x: b.x + r.x0 * b.w,
+      y: b.y + r.y0 * b.h,
+      w: (r.x1 - r.x0) * b.w,
+      h: (r.y1 - r.y0) * b.h,
     }
-    fill(ctx, r, color)
+    fill(ctx, rect, color)
     ctx.strokeStyle = WALL
     ctx.lineWidth = 2
-    ctx.strokeRect(r.x + 1, r.y + 1, r.w - 2, r.h - 2)
-    setFont(ctx, 9)
-    ctx.fillStyle = 'rgba(140, 170, 146, 0.7)'
-    ctx.textAlign = 'center'
-    ctx.fillText(label, r.x + r.w / 2, r.y + Math.min(16, r.h - 6))
-    ctx.textAlign = 'left'
+    ctx.strokeRect(rect.x + 1, rect.y + 1, rect.w - 2, rect.h - 2)
+    if (label) {
+      setFont(ctx, 9)
+      ctx.fillStyle = 'rgba(140, 170, 146, 0.7)'
+      ctx.textAlign = 'center'
+      ctx.fillText(label, rect.x + rect.w / 2, rect.y + Math.min(16, rect.h - 6))
+      ctx.textAlign = 'left'
+    }
     ctx.lineWidth = 1
+  }
+
+  /** Дверь в вертикальной стене: проём и дуга открывания внутрь коридора. */
+  private doorV(c: CanvasRenderingContext2D, x: number, y: number, h: number, dir: number): void {
+    fill(c, { x: x - 2, y, w: 4, h }, INK)
+    c.strokeStyle = '#c9c2a0'
+    c.beginPath()
+    if (dir > 0) c.arc(x, y, h, -Math.PI / 2, 0)
+    else c.arc(x, y + h, h, 0, Math.PI / 2)
+    c.stroke()
+  }
+
+  /** Дверь в горизонтальной стене: проём и дуга открывания. */
+  private doorH(c: CanvasRenderingContext2D, x: number, y: number, w: number, dir: number): void {
+    fill(c, { x, y: y - 2, w, h: 4 }, INK)
+    c.strokeStyle = '#c9c2a0'
+    c.beginPath()
+    if (dir > 0) c.arc(x, y, w, 0, Math.PI / 2)
+    else c.arc(x + w, y, w, Math.PI / 2, Math.PI)
+    c.stroke()
+  }
+
+  /**
+   * Сектор обзора камеры: конус от позиции к цели, обрезанный по плану
+   * комнаты — угол обзора не должен выходить за стены.
+   */
+  private sector(
+    ctx: CanvasRenderingContext2D,
+    pos: readonly number[],
+    at: readonly number[],
+    fov: number,
+    drawRect: Rect,
+    clipRect: Rect,
+    scale: { w: number; h: number },
+    world: { x0: number; x1: number; z0: number; z1: number },
+    lenK: number,
+  ): void {
+    const toMap = (wx: number, wz: number): { x: number; y: number } =>
+      this.worldToMap(wx, wz, drawRect, world, scale)
+    const cp = toMap(pos[0], pos[2])
+    const ca = toMap(at[0], at[2])
+    const ang = Math.atan2(ca.y - cp.y, ca.x - cp.x)
+    const half = ((fov / 2) * Math.PI) / 180
+    const len = Math.max(46, (drawRect.w + drawRect.h) * 0.5 * lenK)
+    ctx.save()
+    ctx.beginPath()
+    ctx.rect(clipRect.x, clipRect.y, clipRect.w, clipRect.h)
+    ctx.clip()
+    ctx.fillStyle = 'rgba(140, 220, 150, 0.12)'
+    ctx.beginPath()
+    ctx.moveTo(cp.x, cp.y)
+    ctx.lineTo(cp.x + Math.cos(ang - half) * len, cp.y + Math.sin(ang - half) * len)
+    ctx.lineTo(cp.x + Math.cos(ang) * len, cp.y + Math.sin(ang) * len)
+    ctx.lineTo(cp.x + Math.cos(ang + half) * len, cp.y + Math.sin(ang + half) * len)
+    ctx.closePath()
+    ctx.fill()
+    ctx.restore()
   }
 
   private node(ctx: CanvasRenderingContext2D, cam: Cam, cx: number, cy: number, p: number): void {
@@ -382,19 +430,17 @@ export class TdsMap {
     this.hits.push({ cam, r })
   }
 
-  /** Мировые координаты комнаты 4 → пиксели плана. */
-  private worldToMap(x: number, z: number, room: Rect): { x: number; y: number } {
+  /** Мировые координаты комнаты → пиксели плана. */
+  private worldToMap(
+    x: number,
+    z: number,
+    room: Rect,
+    world: { x0: number; x1: number; z0: number; z1: number },
+    scale: { w: number; h: number },
+  ): { x: number; y: number } {
     return {
-      x: room.x + ((x - WORLD.x0) / (WORLD.x1 - WORLD.x0)) * room.w,
-      y: room.y + ((z - WORLD.z0) / (WORLD.z1 - WORLD.z0)) * room.h,
-    }
-  }
-
-  /** Мировые координаты кухни → пиксели плана: вход из коридора сверху. */
-  private worldToMap5(x: number, z: number, room: Rect): { x: number; y: number } {
-    return {
-      x: room.x + ((x - KITCHEN.x0) / (KITCHEN.x1 - KITCHEN.x0)) * room.w,
-      y: room.y + ((-z - 9.2) / 3.6) * room.h,
+      x: room.x + ((x - world.x0) / scale.w) * room.w,
+      y: room.y + ((z - world.z0) / scale.h) * room.h,
     }
   }
 }

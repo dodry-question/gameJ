@@ -9,8 +9,18 @@
 import * as THREE from 'three'
 import { tex, wallTex } from './cctv-room'
 
+export type PostObject = {
+  id: string
+  label: string
+  mesh: THREE.Mesh
+}
+
 export type Post = {
   update(dt: number, t: number): void
+  /** Интерактивные объекты поста для скана по TAB. */
+  objects: PostObject[]
+  /** Канва доски смен — её читают крупным планом на кадре. */
+  boardCanvas: HTMLCanvasElement
 }
 
 /** Габариты комнаты поста: нужен только КАМ-01. */
@@ -78,40 +88,47 @@ function deadScreen(): { tex: THREE.CanvasTexture; redraw: (t: number) => void }
 }
 
 /** Доска на стене: смена Ларионова, сверка архива, запрет на питание. */
-function boardTex(): THREE.CanvasTexture {
-  return tex(256, 192, (c) => {
-    c.fillStyle = '#9aa08e'
-    c.fillRect(0, 0, 256, 192)
-    c.strokeStyle = '#5c6154'
-    c.lineWidth = 6
-    c.strokeRect(3, 3, 250, 186)
-    c.fillStyle = '#3c4038'
-    c.font = 'bold 15px monospace'
-    c.textAlign = 'left'
-    c.fillText('СМЕНА:', 18, 34)
-    c.font = 'bold 17px monospace'
-    c.fillText('ЛАРИОНОВ И. В.', 18, 56)
-    c.font = '14px monospace'
-    c.fillText('до 06:00 · НЕ ПОКИДАТЬ ПОСТ', 18, 76)
-    c.strokeStyle = 'rgba(60, 64, 56, 0.5)'
-    c.lineWidth = 2
-    c.beginPath()
-    c.moveTo(16, 92)
-    c.lineTo(240, 92)
-    c.stroke()
-    c.font = '13px monospace'
-    c.fillText('АРХИВ: сверка записей 03:00', 18, 114)
-    c.fillText('КОРИДОР B — питание НЕ ВЫКЛ.', 18, 134)
-    c.fillText('ЩИТ 3B — линия камер ОТКЛ.', 18, 154)
-    // приписка от руки
-    c.save()
-    c.translate(150, 180)
-    c.rotate(-0.03)
-    c.fillStyle = '#7a3030'
-    c.font = '12px monospace'
-    c.fillText('чужой кабинет 12 — закрыт', 0, 0)
-    c.restore()
-  })
+function makeBoard(): { tex: THREE.CanvasTexture; canvas: HTMLCanvasElement } {
+  const canvas = document.createElement('canvas')
+  canvas.width = 256
+  canvas.height = 192
+  const c = canvas.getContext('2d')!
+  c.fillStyle = '#9aa08e'
+  c.fillRect(0, 0, 256, 192)
+  c.strokeStyle = '#5c6154'
+  c.lineWidth = 6
+  c.strokeRect(3, 3, 250, 186)
+  c.fillStyle = '#3c4038'
+  c.font = 'bold 15px monospace'
+  c.textAlign = 'left'
+  c.fillText('СМЕНА:', 18, 34)
+  c.font = 'bold 17px monospace'
+  c.fillText('ЛАРИОНОВ И. В.', 18, 56)
+  c.font = '14px monospace'
+  c.fillText('до 06:00 · НЕ ПОКИДАТЬ ПОСТ', 18, 76)
+  c.strokeStyle = 'rgba(60, 64, 56, 0.5)'
+  c.lineWidth = 2
+  c.beginPath()
+  c.moveTo(16, 92)
+  c.lineTo(240, 92)
+  c.stroke()
+  c.font = '13px monospace'
+  c.fillText('АРХИВ: сверка записей 03:00', 18, 114)
+  c.fillText('КОРИДОР B — питание НЕ ВЫКЛ.', 18, 134)
+  c.fillText('ЩИТ 3B — линия камер ОТКЛ.', 18, 154)
+  // приписка от руки
+  c.save()
+  c.translate(150, 180)
+  c.rotate(-0.03)
+  c.fillStyle = '#7a3030'
+  c.font = '12px monospace'
+  c.fillText('чужой кабинет 12 — закрыт', 0, 0)
+  c.restore()
+  const t = new THREE.CanvasTexture(canvas)
+  t.magFilter = THREE.NearestFilter
+  t.minFilter = THREE.NearestFilter
+  t.colorSpace = THREE.SRGBColorSpace
+  return { tex: t, canvas }
 }
 
 /** Бирка на связке ключей. */
@@ -251,9 +268,10 @@ export function buildPost(scene: THREE.Scene): Post {
   g.add(seam)
 
   // ── доска со сменой (левая стена) ────────────────────────────────
+  const boardArt = makeBoard()
   const board = new THREE.Mesh(
     new THREE.PlaneGeometry(1.15, 0.85),
-    new THREE.MeshLambertMaterial({ map: boardTex() }),
+    new THREE.MeshLambertMaterial({ map: boardArt.tex }),
   )
   board.position.set(POST.x0 + 0.012, 1.45, POST.z0 + 1.1)
   board.rotation.y = Math.PI / 2
@@ -330,6 +348,8 @@ export function buildPost(scene: THREE.Scene): Post {
 
   let statT = 0
   return {
+    objects: [{ id: 'board', label: 'ДОСКА СМЕН', mesh: board }],
+    boardCanvas: boardArt.canvas,
     update(dt: number, t: number): void {
       // мерцание лампы: держим ровно, изредка спотыкается
       const flick =

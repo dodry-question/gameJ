@@ -44,6 +44,8 @@ export class CameraFeed {
   private channel: '04' | '05' | '01' = '04'
   /** Режим скана (TAB): рамки и подписи на объектах кухни. */
   private scan = false
+  /** Чтение доски смен на посту охраны: крупный план поверх кадра. */
+  private boardRead = false
   /** Открытое меню команд: точка на экране и строки. */
   private menu: { x: number; y: number; id: string; items: Array<{ label: string; action: string }> } | null = null
   private menuHit: MenuItem[] = []
@@ -123,6 +125,11 @@ export class CameraFeed {
 
   get ready(): boolean {
     return this.reveal >= 1
+  }
+
+  /** Последний нарисованный прямоугольник кадра — инструменты проверки. */
+  debugRect(): Rect | null {
+    return this.feedRect
   }
 
   private makeNoise(): HTMLCanvasElement {
@@ -207,11 +214,19 @@ export class CameraFeed {
     return true
   }
 
-  /** TAB на кухне: включить/выключить подсветку объектов. */
+  /** TAB на кухне и посту охраны: включить/выключить подсветку объектов. */
   key(e: KeyboardEvent): boolean {
-    if (e.code === 'Tab' && !e.repeat && this.channel === '05' && this.ready) {
+    if (
+      e.code === 'Tab' &&
+      !e.repeat &&
+      (this.channel === '05' || this.channel === '01') &&
+      this.ready
+    ) {
       this.scan = !this.scan
-      if (!this.scan) this.menu = null
+      if (!this.scan) {
+        this.menu = null
+        this.boardRead = false
+      }
       this.sound.click()
       return true
     }
@@ -259,6 +274,8 @@ export class CameraFeed {
       ctx.restore()
       this.overlay(ctx, feed)
       if (this.channel === '05') this.kitchenUi(ctx, feed, cctv)
+      if (this.channel === '01') this.postUi(ctx, feed)
+      if (this.boardRead) this.drawBoardRead(ctx, feed)
     } else {
       text(ctx, 'НЕТ СИГНАЛА', feed.x + feed.w / 2, feed.y + feed.h / 2, {
         size: 14,
@@ -476,6 +493,12 @@ export class CameraFeed {
 
   click(x: number, y: number, _r: Rect): void {
     if (!this.ready) return
+    // чтение доски: любой клик закрывает
+    if (this.boardRead) {
+      this.boardRead = false
+      this.sound.click()
+      return
+    }
     // меню команд: клик по пункту выполняет команду, мимо — закрывает
     if (this.menuHit.length > 0) {
       const items = this.menuHit
@@ -492,9 +515,16 @@ export class CameraFeed {
       }
       return
     }
-    // клик по объекту кухни открывает меню команд (в режиме скана)
-    if (this.channel === '05' && this.feedRect && this.scan) {
+    // клик по объекту кухни открывает меню команд, по доске поста — чтение
+    if ((this.channel === '05' || this.channel === '01') && this.feedRect && this.scan) {
       const picked = this.pickAt(x, y)
+      if (picked && this.channel === '01') {
+        if (picked.id === 'board') {
+          this.boardRead = true
+          this.sound.click()
+        }
+        return
+      }
       if (picked) {
         this.menu = { x, y, id: picked.id, items: this.menuFor(picked.id) }
         this.sound.click()
@@ -640,5 +670,81 @@ export class CameraFeed {
         yy += 22
       }
     }
+  }
+
+  /**
+   * Слой поста охраны: скан по TAB подсвечивает доску смен; камера здесь
+   * побочная — только сюжет, команд нет.
+   */
+  private postUi(ctx: CanvasRenderingContext2D, f: Rect): void {
+    text(
+      ctx,
+      this.scan ? 'клик по доске — читать · TAB — выключить скан' : 'TAB — осмотреть пост',
+      f.x + f.w / 2,
+      f.y + 12,
+      {
+        size: 9,
+        color: this.scan ? 'rgba(140, 220, 255, 0.85)' : 'rgba(200, 214, 200, 0.55)',
+        align: 'center',
+      },
+    )
+
+    if (!this.scan) return
+    const p = this.cctv?.project('board')
+    if (!p) return
+    const sx = f.x + (p.x / FEED_W) * f.w
+    const sy = f.y + (p.y / FEED_H) * f.h
+    const r = 16
+    ctx.strokeStyle = 'rgba(140, 220, 255, 0.85)'
+    ctx.lineWidth = 1.4
+    for (const [ax, ay] of [
+      [-1, -1],
+      [1, -1],
+      [-1, 1],
+      [1, 1],
+    ]) {
+      ctx.beginPath()
+      ctx.moveTo(sx + ax * r, sy + ay * r - ay * 6)
+      ctx.lineTo(sx + ax * r, sy + ay * r)
+      ctx.lineTo(sx + ax * r - ax * 6, sy + ay * r)
+      ctx.stroke()
+    }
+    ctx.lineWidth = 1
+    setFont(ctx, 9, true)
+    ctx.fillStyle = 'rgba(140, 220, 255, 0.95)'
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillText(p.label, sx, sy - r - 8)
+    ctx.textAlign = 'left'
+  }
+
+  /** Крупный план доски: оператор присматривается и читает, что на ней. */
+  private drawBoardRead(ctx: CanvasRenderingContext2D, f: Rect): void {
+    const board = this.cctv?.boardCanvas
+    ctx.fillStyle = 'rgba(2, 4, 3, 0.78)'
+    ctx.fillRect(f.x, f.y, f.w, f.h)
+    if (!board) return
+    const w = Math.min(f.w * 0.62, 240)
+    const h = (w * board.height) / board.width
+    const x = f.x + (f.w - w) / 2
+    const y = f.y + (f.h - h) / 2 - 6
+    // лёгкая дрожь кадра от «приближения»
+    const jx = Math.sin(performance.now() / 90) * 0.7
+    ctx.save()
+    ctx.beginPath()
+    ctx.rect(x - 3, y - 3, w + 6, h + 6)
+    ctx.clip()
+    ctx.fillStyle = '#0c120d'
+    ctx.fillRect(x - 3, y - 3, w + 6, h + 6)
+    ctx.imageSmoothingEnabled = false
+    ctx.drawImage(board, x + jx, y, w, h)
+    ctx.restore()
+    ctx.strokeStyle = 'rgba(150, 170, 150, 0.6)'
+    ctx.strokeRect(x - 3.5, y - 3.5, w + 7, h + 7)
+    text(ctx, 'ПРИБЛИЖЕНИЕ ×4 · щёлкните, чтобы закрыть', f.x + f.w / 2, y + h + 16, {
+      size: 9,
+      color: 'rgba(160, 220, 170, 0.85)',
+      align: 'center',
+    })
   }
 }

@@ -166,12 +166,17 @@ export class PowerGame {
 
   release(): void {
     this.dragIdx = -1
+    this.sound.tuneTone(null)
   }
 
   private applySlider(x: number): void {
     const s = this.sliders[this.dragIdx]
     if (!s?.r) return
     s.v = clamp((x - s.r.x - 7) / (s.r.w - 14), 0, 1)
+    // тон следует за ползунком: у каждого свой регистр
+    const freq =
+      this.dragIdx === 0 ? 240 + s.v * 1500 : this.dragIdx === 1 ? 150 + s.v * 800 : 90 + s.v * 220
+    this.sound.tuneTone(freq)
   }
 
   private flip(label: string): void {

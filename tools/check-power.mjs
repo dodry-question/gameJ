@@ -1,6 +1,7 @@
-// Проверка релейного щита (power.local) и камеры 01: гейт до письма → 403 →
-// подсказка обесточенного узла в TDS → осциллограф (ползунки) → рубильники
-// по порядку → питание подано → узел 01 в сети → пост охраны в эфире.
+// Проверка питания линий камер: попытка входа в обесточенный узел 01 →
+// окно ошибки «НЕТ ПИТАНИЯ» → блокнот с адресом → power.local → осциллограф
+// (ползунки) → рубильники по порядку (плюс авария) → питание подано →
+// узел 01 в сети → пост охраны в эфире.
 //   node tools/check-power.mjs [url] [outDir]
 import { chromium } from 'playwright-core'
 import { mkdirSync } from 'node:fs'
@@ -31,16 +32,27 @@ const shot = async (name) =>
   page.screenshot({ path: `${out}/${name}.png`, clip: { x: 0, y: 0, width: 960, height: 720 } })
 const result = {}
 
-// ── 1. Узел 01 обесточен: клик даёт подсказку power.local ────────────
+// ── 1. Попытка входа в обесточенный узел 01 → окно ошибки ────────────
 await page.evaluate(() => window.__tds.reset())
-await page.waitForTimeout(300)
-const node01 = await page.evaluate(() => window.__tds.debugInfo().cam)
-await page.mouse.click(node01.x, node01.y)
-await page.waitForTimeout(300)
-await shot('map-power-hint')
+await page.waitForTimeout(400)
+const n1 = await page.evaluate(() => window.__tds.debugInfo().cam01)
+await page.mouse.move(n1.x, n1.y)
+await page.mouse.down()
+await page.waitForTimeout(1700)
+await page.mouse.up()
+await page.waitForTimeout(500)
+result.errorShown = await page.evaluate(() => window.__tds.debugInfo().error)
+await shot('power-error')
 
-// ── 2. Гейт: до чтения письма power.local отвечает 403 ───────────────
-// (в ?cam гейты открыты, поэтому проверяем только саму страницу)
+// ── 2. Закрыть окно → блокнот с адресом ─────────────────────────────
+await page.mouse.click(480, 360)
+await page.waitForTimeout(2400)
+result.note = await page.evaluate(() => ({
+  open: window.__desk.windows.some((w) => w.key === 'notepad'),
+  address: (window.__desk.noteText || '').includes('power.local'),
+}))
+
+// ── 3. power.local: осциллограф → рубильники ────────────────────────
 await page.mouse.click(38, 704) // «Пуск»
 await page.waitForTimeout(300)
 await page.mouse.click(110, 522) // Netscape
@@ -51,9 +63,7 @@ await page.keyboard.press('Enter')
 await page.waitForTimeout(1600)
 await shot('power-phase')
 result.page = await page.evaluate(() => window.__browser?.page ?? null)
-result.phase = await page.evaluate(() => window.__power?.debugState() ?? null)
 
-// ── 3. Осциллограф: частота и амплитуда точно, фаза — за опорной ─────
 const deadline = Date.now() + 20000
 while (Date.now() < deadline) {
   const st = await page.evaluate(() => window.__power.debugState())
@@ -69,7 +79,6 @@ while (Date.now() < deadline) {
 }
 result.afterPhase = await page.evaluate(() => window.__power.debugState())
 
-// ── 4. Рубильники: верный порядок и одна авария для проверки сброса ──
 await page.evaluate(() => window.__power.debugLever('ШИНА')) // не первый — КЗ
 await page.waitForTimeout(300)
 result.afterWrong = await page.evaluate(() => window.__power.debugState())
@@ -83,17 +92,17 @@ await shot('power-won')
 result.won = await page.evaluate(() => window.__power.debugState())
 result.cctvPower = await page.evaluate(() => window.__cctv.powerReady)
 
-// ── 5. Узел 01 в сети: удержание → эфир поста охраны ─────────────────
+// ── 4. Узел 01 в сети: удержание → эфир поста охраны ────────────────
 await page.evaluate(() => window.__tds.reset())
-await page.waitForTimeout(300)
-const map = await page.evaluate(() => ({
-  cam: window.__tds.debugInfo().cam,
-  online01: true,
-}))
-await page.evaluate(() => window.__tds.forceChannel('01'))
-await page.waitForTimeout(1000)
+await page.waitForTimeout(400)
+const n1b = await page.evaluate(() => window.__tds.debugInfo().cam01)
+await page.mouse.move(n1b.x, n1b.y)
+await page.mouse.down()
+await page.waitForTimeout(1700)
+await page.mouse.up()
+await page.waitForTimeout(1400)
+result.postFeed = await page.evaluate(() => window.__tds.debugInfo().screen)
 await shot('post-cam-01')
-result.postHeader = await page.evaluate(() => window.__tds.debugInfo().screen)
 
 console.log(JSON.stringify(result, null, 2))
 if (errors.length) console.log('ERRORS:', errors)

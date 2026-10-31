@@ -270,11 +270,11 @@ export class Cctv {
     fov: 64,
   }
 
-  /** Камера поста охраны: угол под потолком, весь пульт в кадре. */
+  /** Камера поста охраны: в углу под потолком, как 04 и 05. */
   static readonly CAM01 = {
-    pos: [10.1, 2.15, -1.95] as [number, number, number],
-    at: [7.7, 0.8, -4.3] as [number, number, number],
-    fov: 60,
+    pos: [10.15, 2.3, -1.75] as [number, number, number],
+    at: [7.8, 0.75, -4.4] as [number, number, number],
+    fov: 58,
   }
 
   /** Видит ли камера точку (x, z) — для радара на карте. */
@@ -566,6 +566,16 @@ export class Cctv {
   /** Параметры камеры кухни — для узла 05 на карте. */
   get cam05(): typeof Cctv.CAM05 {
     return Cctv.CAM05
+  }
+
+  /** Параметры камеры поста охраны — для узла 01 на карте. */
+  get cam01(): typeof Cctv.CAM01 {
+    return Cctv.CAM01
+  }
+
+  /** Канва доски смен на посту — её читают крупным планом по TAB. */
+  get boardCanvas(): HTMLCanvasElement | null {
+    return this.post.boardCanvas ?? null
   }
 
   private applyCam(): void {
@@ -1912,11 +1922,18 @@ export class Cctv {
 
   // ── ввод по кадру кухни ───────────────────────────────────────────
 
-  /** Что под курсором на кухне (nx, ny — NDC кадра). */
+  /** Объекты той комнаты, которую сейчас смотрим (для скана по TAB). */
+  private sceneObjects(): Array<{ id: string; label: string; mesh: THREE.Object3D }> {
+    if (this.view === '05') return this.kitchen.objects
+    if (this.view === '01') return this.post.objects
+    return []
+  }
+
+  /** Что под курсором на кухне или посту (nx, ny — NDC кадра). */
   pick(nx: number, ny: number): { id: string; label: string } | null {
-    if (this.view !== '05') return null
+    const objs = this.sceneObjects().filter((o) => (o.mesh as THREE.Mesh).visible)
+    if (objs.length === 0) return null
     this.raycaster.setFromCamera(new THREE.Vector2(nx, ny), this.camera)
-    const objs = this.kitchen.objects.filter((o) => o.mesh.visible)
     const hits = this.raycaster.intersectObjects(objs.map((o) => o.mesh), true)
     for (const h of hits) {
       let o: THREE.Object3D | null = h.object
@@ -1931,9 +1948,8 @@ export class Cctv {
 
   /** Экранная точка объекта в пикселях ленты 320×240 — для режима скана. */
   project(id: string): { x: number; y: number; label: string } | null {
-    if (this.view !== '05') return null
-    const obj = this.kitchen.objects.find((o) => o.id === id)
-    if (!obj || !obj.mesh.visible) return null
+    const obj = this.sceneObjects().find((o) => o.id === id)
+    if (!obj || !(obj.mesh as THREE.Mesh).visible) return null
     const p = new THREE.Vector3()
     obj.mesh.getWorldPosition(p)
     p.project(this.camera)
