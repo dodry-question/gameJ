@@ -402,10 +402,6 @@ export class Desktop {
       return
     }
     fill(ctx, { x: 0, y: 0, w: DESKTOP_W, h: DESKTOP_H }, C.desk)
-    if (this.grain) {
-      ctx.fillStyle = this.grain
-      ctx.fillRect(0, 0, DESKTOP_W, DESKTOP_H - TASKBAR)
-    }
     this.drawIcons()
     this.drawBand()
 
@@ -422,6 +418,11 @@ export class Desktop {
     else if (this.escaped) this.drawEscaped()
     this.drawCursor()
     this.scanlines()
+    // зерно ЭЛТ поверх всего монитора: окна, обои, курсор — всё под ним
+    if (this.grain) {
+      ctx.fillStyle = this.grain
+      ctx.fillRect(0, 0, DESKTOP_W, DESKTOP_H - TASKBAR)
+    }
   }
 
   /**
@@ -530,7 +531,7 @@ export class Desktop {
       img.data[i] = v
       img.data[i + 1] = v
       img.data[i + 2] = v
-      img.data[i + 3] = 22
+      img.data[i + 3] = 40
     }
     c.putImageData(img, 0, 0)
     return ctx.createPattern(n, 'repeat')

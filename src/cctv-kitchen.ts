@@ -140,10 +140,37 @@ export function buildKitchen(scene: THREE.Scene): Kitchen {
   ceil.position.set(0, 2.4, -11)
   g.add(ceil)
 
-  // стены: задняя (с выходом), две боковые; вход — проём из коридора
-  const back = new THREE.Mesh(new THREE.BoxGeometry(4.4, 2.4, 0.2), wallMat)
-  back.position.set(0, 1.2, KITCHEN.z0 - 0.1)
-  g.add(back)
+  // стены: задняя (с проёмом выхода), две боковые; вход — проём из коридора
+  const backSeg = (cx: number, w: number): void => {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(w, 2.4, 0.2), wallMat)
+    m.position.set(cx, 1.2, KITCHEN.z0 - 0.1)
+    g.add(m)
+  }
+  backSeg(-1.65, 2.2)
+  backSeg(1.65, 2.2)
+  const backLintel = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.6, 0.2), wallMat)
+  backLintel.position.set(0, 2.1, KITCHEN.z0 - 0.1)
+  g.add(backLintel)
+
+  // коридор за выходной дверью: тёмный, с тусклым светом в глубине
+  const corridorMat = new THREE.MeshLambertMaterial({ color: 0x4a4a44 })
+  const corrFloor = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.06, 3.0), corridorMat)
+  corrFloor.position.set(0, 0, KITCHEN.z0 - 1.6)
+  g.add(corrFloor)
+  const corrCeil = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.06, 3.0), corridorMat)
+  corrCeil.position.set(0, 2.4, KITCHEN.z0 - 1.6)
+  g.add(corrCeil)
+  for (const sx of [-1, 1]) {
+    const corrWall = new THREE.Mesh(new THREE.BoxGeometry(0.12, 2.4, 3.0), wallMat)
+    corrWall.position.set(sx * 0.8, 1.2, KITCHEN.z0 - 1.6)
+    g.add(corrWall)
+  }
+  const corrEnd = new THREE.Mesh(new THREE.BoxGeometry(1.6, 2.4, 0.12), wallMat)
+  corrEnd.position.set(0, 1.2, KITCHEN.z0 - 3.05)
+  g.add(corrEnd)
+  const corrLight = new THREE.PointLight(0x8fa0b8, 3.5, 6)
+  corrLight.position.set(0, 2.1, KITCHEN.z0 - 2.6)
+  g.add(corrLight)
   for (const sx of [-1, 1]) {
     const wall = new THREE.Mesh(new THREE.BoxGeometry(0.2, 2.4, 3.6), wallMat)
     wall.position.set(sx * 2.3, 1.2, -11)
@@ -505,7 +532,7 @@ export function buildKitchen(scene: THREE.Scene): Kitchen {
 
   const objects: KitchenObject[] = [
     { id: 'knife', label: 'НОЖ', mesh: knife, stand: [-0.45, -10.4], yaw: -2.3 },
-    { id: 'fridge', label: 'ХОЛОДИЛЬНИК', mesh: fridge, stand: [1.05, -11.2], yaw: Math.PI / 2 },
+    { id: 'fridge', label: 'ХОЛОДИЛЬНИК', mesh: fridge, stand: [2.0, -10.3], yaw: Math.PI },
     { id: 'meat', label: 'МЯСО', mesh: meat, stand: [1.05, -11.2], yaw: Math.PI / 2 },
     { id: 'stove', label: 'ПЛИТА', mesh: stove, stand: [1.05, -10.0], yaw: Math.PI / 2 },
     { id: 'printer', label: 'ПРИНТЕР', mesh: printer, stand: [-1.0, -11.85], yaw: 0.9 },

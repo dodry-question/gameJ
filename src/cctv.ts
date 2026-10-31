@@ -791,16 +791,16 @@ export class Cctv {
       }
       return
     }
-    // Уход через дверь: у порога разворачивается и уходит обратно в коридор
-    // (тем же путём, что пришла), из кадра КАМ-05 — и всё, она свободна.
+    // Уход через дверь с клавиатурой: у порога шагает в коридор за ней
+    // и растворяется в его темноте — она свободна.
     if (this.state === 'kitchen' && this.flags.leaving) {
       const g = this.girl!
       const near = Math.hypot(g.position.x - this.targetX, g.position.z - this.targetZ) < 0.35
-      if (near && g.position.z < KITCHEN.z1 + 0.2) {
-        this.targetX = KITCHEN.doorX
-        this.targetZ = -8.4
+      if (near && g.position.z > KITCHEN.z0 + 0.4) {
+        this.targetX = 0
+        this.targetZ = KITCHEN.z0 - 2.4
       }
-      if (g.position.z > -9.02) {
+      if (g.position.z < KITCHEN.z0 - 1.5) {
         g.visible = false
         this.setState('gone')
         this.onEscaped?.()
@@ -1129,6 +1129,7 @@ export class Cctv {
       this.add(p, 'LeftForeArm', -0.5 * m, 0, 0)
       this.add(p, 'RightForeArm', -0.5 * m, 0, 0)
       this.add(p, 'Spine', 0.35 * m, 0, 0)
+      if (task.action === 'inspect') this.add(p, 'RightForeArm', -0.5 * m, 0, 0) // тянет ручку
       if (task.action === 'cut') {
         // рубящие взмахи правой рукой
         const chop = Math.max(0, Math.sin(k * 9)) * (k > 0.3 && k < 1.5 ? 1 : 0.2)
@@ -1619,17 +1620,18 @@ export class Cctv {
       return
     }
     if (t.id === 'fridge' && t.action === 'inspect') {
-      if (at > 0.7 && !t.fired) {
+      // рука дошла до ручки — дверь открывается от её тяги
+      if (at > 0.9 && !t.fired) {
         t.fired = true
         this.flags.fridgeOpen = true
         this.kitchen.setFridgeOpen(true)
       }
-      if (at > 1.7 && !this.flags.meatOut) {
+      if (at > 1.9 && !this.flags.meatOut) {
         this.flags.meatOut = true
         this.kitchen.meat.visible = true
         this.say('тут кусок мяса... большой, свежий', 3.2)
       }
-      if (at > 2.4) this.task = null
+      if (at > 2.8) this.task = null
       return
     }
     if (t.id === 'meat' && t.action === 'cut') {
@@ -1639,7 +1641,7 @@ export class Cctv {
         this.kitchen.plate.visible = true
         this.flags.meatCut = true
         this.say('внутри железка... на ней выбит адрес', 3)
-        this.onNoteAppend?.('Железка внутри мяса: выбит адрес pairs.local — узел перехвата')
+        this.onNoteAppend?.('Железка внутри мяса: выбит адрес http://pairs.local — узел перехвата')
       }
       if (at > 2.6) {
         this.say('пары точка локал. это их узел перехвата — записывай!', 4)
@@ -1659,7 +1661,7 @@ export class Cctv {
       if (at > 0.8 && !t.fired) {
         t.fired = true
         this.say('на наклейке адрес: print.local — туда вводят пароль для печати', 4)
-        this.onNoteAppend?.('Принтер на кухне: print.local — ввести пароль и нажать «Печать»')
+        this.onNoteAppend?.('Принтер на кухне: http://print.local — ввести пароль и нажать «Печать»')
       }
       if (at > 1.9) this.task = null
       return
