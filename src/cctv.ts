@@ -265,13 +265,13 @@ export class Cctv {
   /** Маньяк из набора PSX-персонажей: грузим своего FBX с текстурой. */
   private loadManiac(): void {
     const manager = new THREE.LoadingManager()
-    manager.setURLModifier((url) => (url.toLowerCase().endsWith('.png') ? '/cctv/maniac.png' : url))
-    const tex = new THREE.TextureLoader(manager).load('/cctv/maniac.png')
+    manager.setURLModifier((url) => (url.toLowerCase().endsWith('.png') ? 'cctv/maniac.png' : url))
+    const tex = new THREE.TextureLoader(manager).load('cctv/maniac.png')
     tex.magFilter = THREE.NearestFilter
     tex.minFilter = THREE.NearestFilter
     tex.colorSpace = THREE.SRGBColorSpace
     const skin = new THREE.MeshLambertMaterial({ map: tex })
-    new FBXLoader(manager).load('/cctv/maniac.fbx', (fbx) => {
+    new FBXLoader(manager).load('cctv/maniac.fbx', (fbx) => {
       fbx.scale.setScalar(0.0037)
       fbx.traverse((o) => {
         if ((o as THREE.Mesh).isMesh) {
@@ -290,15 +290,15 @@ export class Cctv {
 
   private loadGirl(): void {
     const manager = new THREE.LoadingManager()
-    manager.setURLModifier((url) => (url.toLowerCase().endsWith('.png') ? '/cctv/girl.png' : url))
+    manager.setURLModifier((url) => (url.toLowerCase().endsWith('.png') ? 'cctv/girl.png' : url))
 
-    const tex = new THREE.TextureLoader(manager).load('/cctv/girl.png')
+    const tex = new THREE.TextureLoader(manager).load('cctv/girl.png')
     tex.magFilter = THREE.NearestFilter
     tex.minFilter = THREE.NearestFilter
     tex.colorSpace = THREE.SRGBColorSpace
     const skin = new THREE.MeshLambertMaterial({ map: tex })
 
-    new FBXLoader(manager).load('/cctv/girl.fbx', (fbx) => {
+    new FBXLoader(manager).load('cctv/girl.fbx', (fbx) => {
       // модель в сантиметрах, рост ~445 единиц: 0.0037 даёт ~1,65 м
       fbx.scale.setScalar(0.0037)
       fbx.traverse((o) => {
