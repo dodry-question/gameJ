@@ -270,7 +270,7 @@ export class Desktop {
     }
     cctv.onNoteAppend = (line) => this.appendNote(line)
     // Через пять секунд после входа игрок должен понять, что от него хотят.
-    window.setTimeout(() => this.notifyMail(), 2000)
+    window.setTimeout(() => this.notifyMail(), 5000)
   }
 
   // ── жизненный цикл ───────────────────────────────────────────────
@@ -530,7 +530,7 @@ export class Desktop {
       img.data[i] = v
       img.data[i + 1] = v
       img.data[i + 2] = v
-      img.data[i + 3] = 16
+      img.data[i + 3] = 22
     }
     c.putImageData(img, 0, 0)
     return ctx.createPattern(n, 'repeat')

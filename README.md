@@ -1,4 +1,4 @@
-# gameJ — прототип под Siberian Game Jam (ноябрь 2026)
+# thedeadstroach — Siberian Game Jam, ноябрь 2026
 
 > ▶ **Играть онлайн:** https://thedestroyer-9p8f.zai-ai.site
 > *(обновляется при каждом пуше — ссылка постоянная; быстрый тест кино: `?ui&pairs`)*

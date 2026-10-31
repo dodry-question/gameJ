@@ -791,15 +791,16 @@ export class Cctv {
       }
       return
     }
-    // Уход через дверь: дойдя до порога, шагает наружу и растворяется.
+    // Уход через дверь: у порога разворачивается и уходит обратно в коридор
+    // (тем же путём, что пришла), из кадра КАМ-05 — и всё, она свободна.
     if (this.state === 'kitchen' && this.flags.leaving) {
       const g = this.girl!
       const near = Math.hypot(g.position.x - this.targetX, g.position.z - this.targetZ) < 0.35
-      if (near) {
-        this.targetX = 0
-        this.targetZ = -13.6
+      if (near && g.position.z < KITCHEN.z1 + 0.2) {
+        this.targetX = KITCHEN.doorX
+        this.targetZ = -8.4
       }
-      if (g.position.z < -13.05) {
+      if (g.position.z > -9.02) {
         g.visible = false
         this.setState('gone')
         this.onEscaped?.()
