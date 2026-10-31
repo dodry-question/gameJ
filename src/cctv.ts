@@ -532,6 +532,11 @@ export class Cctv {
     return this.state !== 'tied'
   }
 
+  /** Она идёт к выходной двери кухни: рабочий стол готовит концовку. */
+  get leaving(): boolean {
+    return this.flags.leaving
+  }
+
   /**
    * Питание линий камер: до победы на power.local узел 01 мёртв, узел 05
    * не подключается (ретранслятор обесточен), даже когда она уже в кухне.
@@ -958,10 +963,11 @@ export class Cctv {
     return { x: px, z: pz }
   }
 
-  /** Игрок дал команду отвязать: она сразу бежит к двери и стучит. */
+  /** Игрок дал команду отвязать: она вскрикивает и сразу бежит к двери. */
   untie(): void {
     if (this.state === 'tied') {
       this.freedAt = this.time
+      this.events.push('scream')
       this.setState('knock')
     }
   }

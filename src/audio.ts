@@ -15,6 +15,7 @@ export class Sound {
   private ambient: AudioBuffer | null = null
   private ambientLoading = false
   private ambientSrc: AudioBufferSourceNode | null = null
+  private ambientGain: GainNode | null = null
   private breath: AudioBuffer | null = null
   private breathLoading = false
   private breathStress: number | null = null
@@ -95,6 +96,11 @@ export class Sound {
       this.loadAmbient()
       this.loadModem()
       this.loadMurzik()
+      // принтер и голоса грузим заранее: печать и крик обязаны звучать сразу
+      this.loadPrinter()
+      void this.grabVoice('sounds/voice/cry.ogg').then((b) => (this.girlCryBuf = b))
+      void this.grabVoice('sounds/scream.ogg').then((b) => (this.endScreamBuf = b))
+      void this.grabVoice('sounds/tututu.ogg').then((b) => (this.tututuBuf = b))
     } catch {
       this.ctx = null
       this.master = null
@@ -150,6 +156,18 @@ export class Sound {
     src.connect(g).connect(out)
     src.start(t)
     this.ambientSrc = src
+    this.ambientGain = g
+  }
+
+  /** Фон комнаты тонет: в концовке остаётся только музыка. */
+  fadeOutAmbient(): void {
+    const ctx = this.ctx
+    const g = this.ambientGain
+    if (!ctx || !g) return
+    const t = ctx.currentTime
+    g.gain.cancelScheduledValues(t)
+    g.gain.setValueAtTime(Math.max(g.gain.value, 0.0001), t)
+    g.gain.linearRampToValueAtTime(0.0001, t + 2.8)
   }
 
   // ── синтез ───────────────────────────────────────────────────────
@@ -664,14 +682,10 @@ export class Sound {
   private loadPrinter(): void {
     if (this.printerLoading) return
     this.printerLoading = true
-    const grab = (file: string): Promise<AudioBuffer> =>
-      fetch('sounds/' + file)
-        .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error('нет файла'))))
-        .then((b) => this.ctx!.decodeAudioData(b))
-    void grab('printer-warm.ogg')
+    void this.grabVoice('sounds/printer-warm.ogg')
       .then((buf) => {
         this.printerWarm = buf
-        return grab('printer-run.ogg')
+        return this.grabVoice('sounds/printer-run.ogg')
       })
       .then((buf) => {
         this.printerRun = buf
@@ -681,6 +695,14 @@ export class Sound {
       .catch(() => {
         this.printerLoading = false
       })
+  }
+
+  /** Общий загрузчик звуковых файлов: fetch + decode, кэш не нужен. */
+  private grabVoice(url: string): Promise<AudioBuffer> {
+    const ctx = this.ctx!
+    return fetch(url)
+      .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error('нет файла: ' + url))))
+      .then((b) => ctx.decodeAudioData(b))
   }
 
   private murzik: AudioBuffer | null = null
@@ -841,6 +863,156 @@ export class Sound {
     g.gain.linearRampToValueAtTime(1.15, t + rampMs / 1000)
     src.connect(g).connect(out)
     src.start(t)
+  }
+
+  // ── концовка: крик девушки, шаги в спину, мешок ───────────────────
+
+  private girlCryBuf: AudioBuffer | null = null
+  private endScreamBuf: AudioBuffer | null = null
+  private tututuBuf: AudioBuffer | null = null
+  private tututuSrc: AudioBufferSourceNode | null = null
+  private gaspSrc: AudioBufferSourceNode | null = null
+  private gaspGain: GainNode | null = null
+
+  /**
+   * Она гарантированно вскрикивает, когда её отвязывают: запись плача идёт
+   * через шину камеры сразу, не дожидаясь редкого голосового таймера.
+   */
+  girlScream(): void {
+    const ctx = this.ctx
+    const bus = this.cameraBus() ?? this.master
+    if (!ctx || !bus || !this.girlCryBuf) return
+    const src = ctx.createBufferSource()
+    src.buffer = this.girlCryBuf
+    const g = ctx.createGain()
+    const t = ctx.currentTime
+    g.gain.setValueAtTime(0.0001, t)
+    g.gain.linearRampToValueAtTime(0.65, t + 0.12)
+    src.connect(g).connect(bus)
+    src.start(t)
+  }
+
+  /**
+   * Шаги за спиной оператора по скрипту: девять шагов за четыре секунды,
+   * каждый ближе и громче предыдущего — к концу источник стоит за затылком.
+   */
+  approachSteps(): void {
+    if (!this.ctx || !this.master || !this.noise) return
+    let when = 0.35
+    let z = 2.9
+    let x = 0.3
+    for (let i = 0; i < 9; i++) {
+      const k = i / 8
+      this.footstep(when, x + (Math.random() - 0.5) * 0.24, z, 0.1 + k * 0.5)
+      when += 0.52 - k * 0.22 // темп ускоряется
+      z -= 0.28 // подбирается вплотную
+      x -= 0.05
+    }
+  }
+
+  /**
+   * Приглушённый голос сквозь мешок: реальная запись крика (Wikimedia
+   * Commons, «NOW screaming», CC0), задавленная lowpass ~360 Гц — рот
+   * закрыт, кричать не получается, только глухие мычащие рывки.
+   */
+  suffocate(vol = 0.85, maxDur = 0): void {
+    const ctx = this.ctx
+    const out = this.master
+    if (!ctx || !out || !this.endScreamBuf) return
+    const t = ctx.currentTime + 0.01
+    const src = ctx.createBufferSource()
+    src.buffer = this.endScreamBuf
+    src.playbackRate.value = 0.82
+    const lp = ctx.createBiquadFilter()
+    lp.type = 'lowpass'
+    lp.frequency.value = 360
+    lp.Q.value = 0.8
+    const g = ctx.createGain()
+    const dur = maxDur > 0 ? Math.min(maxDur, this.endScreamBuf.duration) : this.endScreamBuf.duration
+    g.gain.setValueAtTime(0.0001, t)
+    g.gain.linearRampToValueAtTime(vol, t + 0.06)
+    g.gain.setValueAtTime(vol, t + dur * 0.65)
+    g.gain.exponentialRampToValueAtTime(0.001, t + dur)
+    src.connect(lp).connect(g).connect(out)
+    src.start(t, Math.random() * 0.4)
+    src.stop(t + dur + 0.05)
+  }
+
+  /**
+   * Рваные вдохи: он пытается дышать и не может — мужское дыхание на
+   * ускоренном темпе, пока борется. Тот же CC0-файл, что и в кино провала.
+   */
+  startGasping(): void {
+    const ctx = this.ctx
+    if (!ctx || !this.master) return
+    const start = (buf: AudioBuffer): void => {
+      if (this.gaspSrc) return
+      const src = ctx.createBufferSource()
+      src.buffer = buf
+      src.loop = true
+      src.playbackRate.value = 1.7
+      const g = ctx.createGain()
+      g.gain.setValueAtTime(0.0001, ctx.currentTime)
+      g.gain.linearRampToValueAtTime(0.55, ctx.currentTime + 0.3)
+      src.connect(g).connect(this.master!)
+      src.start()
+      this.gaspSrc = src
+      this.gaspGain = g
+    }
+    if (this.breathMan) start(this.breathMan)
+    else if (!this.breathManLoading) {
+      this.breathManLoading = true
+      void this.grabVoice('sounds/breath-man.mp3')
+        .then((b) => {
+          this.breathMan = b
+          this.breathManLoading = false
+          start(b)
+        })
+        .catch(() => {
+          this.breathManLoading = false
+        })
+    }
+  }
+
+  /** Вдохи гаснут: сознание покидает его. */
+  stopGasping(): void {
+    const g = this.gaspGain
+    const src = this.gaspSrc
+    const ctx = this.ctx
+    if (!g || !src || !ctx) return
+    const t = ctx.currentTime
+    g.gain.cancelScheduledValues(t)
+    g.gain.setValueAtTime(Math.max(g.gain.value, 0.0001), t)
+    g.gain.linearRampToValueAtTime(0.0001, t + 1.6)
+    window.setTimeout(() => {
+      try {
+        src.stop()
+      } catch {
+        // уже остановлен
+      }
+    }, 1800)
+    this.gaspSrc = null
+    this.gaspGain = null
+  }
+
+  /**
+   * «Тутуту» — давящая музыка концовки (файл пользователя), начинается в
+   * момент мешка и остаётся одна в темноте. Играет в луп до перезагрузки.
+   */
+  playTututu(): void {
+    const ctx = this.ctx
+    const out = this.master
+    if (!ctx || !out || !this.tututuBuf || this.tututuSrc) return
+    const src = ctx.createBufferSource()
+    src.buffer = this.tututuBuf
+    src.loop = true
+    const g = ctx.createGain()
+    const t = ctx.currentTime
+    g.gain.setValueAtTime(0.0001, t)
+    g.gain.linearRampToValueAtTime(0.55, t + 1.2)
+    src.connect(g).connect(out)
+    src.start(t)
+    this.tututuSrc = src
   }
 
   // ── модем ────────────────────────────────────────────────────────
@@ -1005,7 +1177,7 @@ export class Sound {
     }
   }
 
-  private footstep(when: number, x: number, z: number): void {
+  private footstep(when: number, x: number, z: number, peak = 0.09 + Math.random() * 0.04): void {
     const ctx = this.ctx
     const out = this.master
     if (!ctx || !out || !this.noise) return
@@ -1024,8 +1196,6 @@ export class Sound {
       panner.setPosition(x, -0.2, z)
     }
     panner.connect(out)
-
-    const peak = 0.09 + Math.random() * 0.04
 
     // шорох подошвы по полу
     const src = ctx.createBufferSource()

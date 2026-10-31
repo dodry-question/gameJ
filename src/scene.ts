@@ -32,8 +32,16 @@ export class Room {
   private target = new THREE.Vector3(0, 0.195, 0.07)
   private look = new THREE.Vector2()
   private clock = 0
+  /** Фаза концовки: тряска головы мешком, потеря сознания, чернота. */
+  private ending: 'none' | 'bag' | 'faint' | 'black' = 'none'
+  private endingAt = 0
+  private endOverlay: HTMLDivElement | null = null
+  private endText: HTMLDivElement | null = null
+  private host: HTMLElement
+  private tmpTarget = new THREE.Vector3()
 
   constructor(host: HTMLElement, desktop: HTMLCanvasElement) {
+    this.host = host
     this.renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance' })
     this.renderer.outputColorSpace = THREE.SRGBColorSpace
     this.renderer.toneMapping = THREE.NoToneMapping
@@ -362,16 +370,60 @@ export class Room {
     this.look.set(nx, ny)
   }
 
+  /**
+   * Фаза концовки: 'bag' — на голову надевают мешок, голову трясёт; 'faint'
+   * — сознание медленно гаснет (чернота съедает кадр); 'black' — полная
+   * тьма, проявляется прощальный текст.
+   */
+  setEnding(phase: 'bag' | 'faint' | 'black'): void {
+    this.ending = phase
+    this.endingAt = this.clock
+    if (!this.endOverlay) {
+      const ov = document.createElement('div')
+      ov.style.cssText =
+        'position:fixed;inset:0;background:#000;opacity:0;pointer-events:none;z-index:60'
+      const tx = document.createElement('div')
+      tx.style.cssText =
+        'position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;opacity:0;transition:opacity 2.2s;text-align:center;color:#cfd4cf;font-family:"Times New Roman",Times,serif'
+      tx.innerHTML =
+        '<div style="font-size:34px;font-weight:700;letter-spacing:0.1em">ВЫ ПРОШЛИ ИГРУ</div>' +
+        '<div style="font-size:21px;margin-top:16px;color:#98a298;letter-spacing:0.06em">Спасибо Вам!</div>'
+      ov.appendChild(tx)
+      this.endText = tx
+      this.endOverlay = ov
+      this.host.appendChild(ov)
+    }
+  }
+
   update(dt: number): void {
     this.clock += dt
     const t = this.clock
 
     // параллакс: еле заметный, чтобы экран не качался как лодка
     const k = 1 - Math.pow(0.06, dt)
-    this.camera.position.x += (this.eye.x + this.look.x * 0.0045 - this.camera.position.x) * k
+    // концовка: голову оператора трясёт и дёргает — он пытается вырваться
+    let shake = 0
+    if (this.ending === 'bag') {
+      const elapsed = this.clock - this.endingAt
+      // резкие рывки с затуханием: схватили, мотает изо всех сил
+      shake = 0.05 * Math.max(0, 1 - elapsed / 8) * (1 + Math.sin(elapsed * 13) * 0.4)
+      if (Math.random() < 0.06) shake *= 2.4
+    }
+    this.camera.position.x +=
+      (this.eye.x + this.look.x * 0.0045 + (Math.random() - 0.5) * shake - this.camera.position.x) * k
     this.camera.position.y +=
-      (this.eye.y + this.look.y * 0.003 + Math.sin(t * 0.55) * 0.0004 - this.camera.position.y) * k
-    this.camera.lookAt(this.target)
+      (this.eye.y +
+        this.look.y * 0.003 +
+        Math.sin(t * 0.55) * 0.0004 +
+        (Math.random() - 0.5) * shake -
+        this.camera.position.y) *
+      k
+    const target = this.ending === 'none' ? this.target : this.tmpTarget.copy(this.target)
+    if (shake > 0) {
+      target.x += (Math.random() - 0.5) * shake * 2.2
+      target.y += (Math.random() - 0.5) * shake * 2.2
+    }
+    this.camera.lookAt(target)
 
     // мерцание экрана
     const flick = 1 + Math.sin(t * 31.3) * 0.015 + Math.sin(t * 7.1) * 0.02
@@ -396,6 +448,16 @@ export class Room {
     attr.needsUpdate = true
 
     this.pass.uniforms.uTime.value = t
+
+    // затемнение концовки: сознание гаснет медленно, текст проявляется в тьме
+    const ov = this.endOverlay
+    if (ov) {
+      const e = this.clock - this.endingAt
+      if (this.ending === 'bag') ov.style.opacity = '0'
+      else if (this.ending === 'faint') ov.style.opacity = String(Math.min(1, e / 3.5))
+      else ov.style.opacity = '1'
+      if (this.endText) this.endText.style.opacity = this.ending === 'black' && e > 0.6 ? '1' : '0'
+    }
   }
 
   render(): void {

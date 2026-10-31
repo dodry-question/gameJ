@@ -201,6 +201,7 @@ export class CameraFeed {
       for (const ev of cctv.events.splice(0)) {
         if (ev === 'doorDeny') this.sound.error()
         else if (ev === 'doorOk') this.sound.open()
+        else if (ev === 'scream') this.sound.girlScream()
       }
     }
     // принтер: пока печатает — гудит (прогрев, потом шум)

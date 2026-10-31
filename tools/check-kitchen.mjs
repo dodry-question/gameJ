@@ -162,9 +162,13 @@ result.noteText = await page.evaluate(() =>
 )
 
 // ── 6. Она берёт бумажку и выходит: «ОНА УШЛА» ───────────────────────
-await page.waitForFunction(() => window.__desk?.escaped === true, null, { timeout: 45000 })
+await page.waitForFunction(() => window.__desk?.debugInfo().escaped === true, null, { timeout: 45000 })
 result.escaped = true
+await page.waitForTimeout(5200)
 await shot('07-escaped')
+await page.waitForFunction(() => window.__desk?.girlDead === true, null, { timeout: 25000 })
+result.endingText = true
+await shot('08-ending')
 
 // ── 7. Провал: кино — маньяк идёт по кухне, выключение ПК ────────────
 await page.reload({ waitUntil: 'networkidle' })

@@ -227,6 +227,14 @@ export class Desktop {
   private cineMuted = false
   /** Отладка ?power уже отработала. */
   private debugPowerDone = false
+  /** Концовка: она ушла — а за спиной оператора уже стоят. */
+  private endingPhase: 'none' | 'watch' | 'bag' | 'faint' | 'black' = 'none'
+  private endingAt = 0
+  private endSteps = false
+  private endG1 = false
+  private endG2 = false
+  /** Фазу концовки получает 3D-сцена: тряска головы, чернота, текст. */
+  endingFx?: (phase: 'bag' | 'faint' | 'black') => void
   /** Сколько строк [!!] терминала уже озвучено ошибкой. */
   private cmdSounds = 0
   /** Загрузочный экран Win2000: играет один раз при старте, клик пропускает. */
@@ -267,10 +275,10 @@ export class Desktop {
       y: 8 + i * 94,
     }))
     ;(window as unknown as { __desk?: Desktop }).__desk = this
-    // Исходы кухни: конец демо и кино провала — их рисует рабочий стол.
+    // Исходы кухни: кино провала рисует рабочий стол; концовка побега
+    // запускается, когда она пошла к выходной двери (см. tick).
     const cctv = getCctv()
     cctv.onEscaped = () => {
-      this.escaped = true
       this.dirty = true
     }
     cctv.onAttackPhase = (phase) => {
@@ -306,6 +314,17 @@ export class Desktop {
       this.debugPowerDone = true
       this.powerRestored()
     }
+
+    // Концовка: она пошла к выходной двери кухни — показать это игроку,
+    // а за спиной оператора уже подходят. Дебаг ?ending запускает сразу.
+    if (
+      this.endingPhase === 'none' &&
+      ((getCctv().leaving && getCctv().girlState === 'kitchen') ||
+        (location.search.includes('ending') && getCctv().loaded))
+    ) {
+      this.beginEnding()
+    }
+    if (this.endingPhase !== 'none') this.tickEnding()
 
     // Живое зерно ЭЛТ: даже на неподвижном столе монитору нужна перерисовка,
     // иначе паттерн зерна замирает и картинка становится «мёртвой».
@@ -1563,6 +1582,7 @@ export class Desktop {
     files: DeskFile[]
     printedCode: string | null
     pairsLost: boolean
+    escaped: boolean
   } {
     return {
       unlockNote: this.unlockNoteSent,
@@ -1570,6 +1590,7 @@ export class Desktop {
       files: this.explorerFiles(),
       printedCode: this.printedCode,
       pairsLost: this.pairsLostFlag,
+      escaped: this.escaped || this.endingPhase !== 'none',
     }
   }
 
@@ -1606,6 +1627,68 @@ export class Desktop {
     this.pendingBrowserPage = 'pairs'
     this.open('browser')
     this.dirty = true
+  }
+
+  /**
+   * Концовка. Она пошла к выходу: экран лочится, оператор смотрит в КАМ-05,
+   * как она уходит на улицу. За спиной нарастают шаги, потом на голову
+   * надевают мешок: голову трясёт, он мычит и не может вдохнуть, играет
+   * давящая музыка. Сознание медленно гаснет — и в черноте остаётся текст.
+   */
+  private beginEnding(): void {
+    this.endingPhase = 'watch'
+    this.endingAt = performance.now()
+    this.cinematic = true
+    // игрок обязан видеть момент побега: принудительно КАМ-05 в эфире
+    this.throwToCamera()
+    this.dirty = true
+  }
+
+  private endNext(phase: 'bag' | 'faint' | 'black'): void {
+    this.endingPhase = phase
+    this.endingAt = performance.now()
+    if (phase === 'bag') {
+      // мешок: глухие мычащие попытки закричать + рваные вдохи + музыка
+      this.sound.suffocate(0.9)
+      this.sound.startGasping()
+      this.sound.playTututu()
+    } else if (phase === 'faint') {
+      // сознание уходит: вдохи гаснут, комнатный фон тонет, музыка остаётся
+      this.sound.stopGasping()
+      this.sound.fadeOutAmbient()
+    }
+    this.endingFx?.(phase)
+    this.dirty = true
+  }
+
+  private tickEnding(): void {
+    const t = (performance.now() - this.endingAt) / 1000
+    if (this.endingPhase === 'watch') {
+      if (t >= 0.5 && !this.endSteps) {
+        this.endSteps = true
+        this.sound.approachSteps()
+      }
+      if (t >= 4.4) this.endNext('bag')
+    } else if (this.endingPhase === 'bag') {
+      // дёргается и мычит, пока может
+      if (t >= 2.3 && !this.endG1) {
+        this.endG1 = true
+        this.sound.suffocate(0.75, 0.65)
+      }
+      if (t >= 3.9 && !this.endG2) {
+        this.endG2 = true
+        this.sound.suffocate(0.6, 0.5)
+      }
+      if (t >= 5.4) this.endNext('faint')
+    } else if (this.endingPhase === 'faint') {
+      if (t >= 3.6) this.endNext('black')
+    } else if (this.endingPhase === 'black') {
+      // текст проявился: клик перезапускает смену
+      if (t >= 2.4 && !this.girlDead) {
+        this.girlDead = true
+        this.dirty = true
+      }
+    }
   }
 
   /**

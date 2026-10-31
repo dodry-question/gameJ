@@ -97,6 +97,9 @@ if (location.search.includes('ui')) {
 }
 
 function run(room: Room): void {
+  // фазы концовки уходят в 3D-сцену: тряска головы мешком, чернота, текст
+  desktop.endingFx = (phase) => room.setEnding(phase)
+
   function paintDesktop(): void {
     desktop.draw()
     room.refreshScreen()
