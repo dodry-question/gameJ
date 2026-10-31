@@ -1,7 +1,17 @@
 import { C, bevel, ellipsis, fill, inside, panel, setFont, text } from './draw'
 import type { Rect } from './draw'
 import { drawIcon } from './icons'
+import { resizeCursorCss } from './cursors'
+import type { ResizeKind } from './cursors'
 import type { App } from './app'
+
+/** Зона ресайза → вид двойной стрелки. */
+function edgeToKind(edge: string): ResizeKind {
+  if (edge === 'e' || edge === 'w') return 'ew'
+  if (edge === 'n' || edge === 's') return 'ns'
+  if (edge === 'se' || edge === 'nw') return 'nwse'
+  return 'nesw'
+}
 import { Browser } from './apps/browser'
 import { Explorer } from './apps/explorer'
 import type { DeskFile } from './apps/explorer'
@@ -1813,10 +1823,10 @@ export class Desktop {
 
   // ── ввод ─────────────────────────────────────────────────────────
 
-  /** Потянуть за край окна: правый, нижний или угол. */
+  /** Потянуть за любой край или угол окна. */
   private resizing: {
     win: Win
-    edge: 'e' | 's' | 'se'
+    edge: 'e' | 'w' | 'n' | 's' | 'ne' | 'nw' | 'se' | 'sw'
     x: number
     y: number
     w: number
@@ -2055,8 +2065,22 @@ export class Desktop {
 
     if (this.resizing) {
       const r = this.resizing
-      if (r.edge !== 's') r.win.w = clamp(r.w + x - r.x, 320, DESKTOP_W - r.win.x)
-      if (r.edge !== 'e') r.win.h = clamp(r.h + y - r.y, 220, DESKTOP_H - TASKBAR - r.win.y)
+      const edge = r.edge
+      const dx = x - r.x
+      const dy = y - r.y
+      if (edge.includes('e')) r.win.w = clamp(r.w + dx, 320, DESKTOP_W - r.win.x)
+      if (edge.includes('s')) r.win.h = clamp(r.h + dy, 220, DESKTOP_H - TASKBAR - r.win.y)
+      // левый и верхний края двигают и точку опоры: окно растёт в другую сторону
+      if (edge.includes('w')) {
+        const w = clamp(r.w - dx, 320, r.w + r.win.x)
+        r.win.x = r.win.x + r.win.w - w
+        r.win.w = w
+      }
+      if (edge.includes('n')) {
+        const h = clamp(r.h - dy, 220, r.h + r.win.y)
+        r.win.y = r.win.y + r.win.h - h
+        r.win.h = h
+      }
       this.dirty = true
       return
     }
@@ -2087,25 +2111,27 @@ export class Desktop {
     this.dirty = true
   }
 
-  /** Системный курсор подсказывает, что край окна можно тянуть. */
+  /** Системный курсор подсказывает, что окно можно тянуть за край или угол. */
   private updateCursor(x: number, y: number): void {
-    let cur = 'default'
+    let edge: ReturnType<Desktop['resizeEdge']> = null
     if (!this.drag && !this.resizing && !this.iconDrag && !this.appDrag && !this.pressedTitle) {
       const ordered = this.windows.filter((w) => !w.min).sort((a, b) => b.z - a.z)
       for (const win of ordered) {
         if (!inside({ x: win.x, y: win.y, w: win.w, h: win.h }, x, y)) continue
-        const edge = win.max ? null : this.resizeEdge(win, x, y)
-        if (edge === 'e') cur = 'ew-resize'
-        else if (edge === 's') cur = 'ns-resize'
-        else if (edge === 'se') cur = 'nwse-resize'
+        edge = win.max ? null : this.resizeEdge(win, x, y)
         break
       }
     } else if (this.resizing) {
-      cur = this.resizing.edge === 'e' ? 'ew-resize' : this.resizing.edge === 's' ? 'ns-resize' : 'nwse-resize'
+      edge = this.resizing.edge
     }
+    const cur = edge ? resizeCursorCss(edgeToKind(edge)) : 'default'
+    if (this.hoverCursor !== cur) this.hoverCursor = cur
     const canvas = this.ctx.canvas
     if (canvas.style.cursor !== cur) canvas.style.cursor = cur
   }
+
+  /** Последний курсор-ховер: его ставит на хост 3D-сцена (канвас — текстура). */
+  hoverCursor = 'default'
 
   /** Точка клика по ползунку → громкость; за пределами желобка — крайние. */
   private setVolumeAt(y: number): void {    const tr = this.volumeTrack()
@@ -2121,6 +2147,7 @@ export class Desktop {
   pointerOut(): void {
     if (!this.pointer.over) return
     this.pointer.over = false
+    this.hoverCursor = 'default'
     this.dirty = true
   }
 
@@ -2253,13 +2280,23 @@ export class Desktop {
     )
   }
 
-  /** Какой край окна под курсором: правый, нижний, угол — или null. */
-  private resizeEdge(win: Win, x: number, y: number): 'e' | 's' | 'se' | null {
-    const nearE = x >= win.x + win.w - 6 && x <= win.x + win.w + 2 && y >= win.y + 20 && y <= win.y + win.h + 2
-    const nearS = y >= win.y + win.h - 6 && y <= win.y + win.h + 2 && x >= win.x + 20 && x <= win.x + win.w + 2
-    if (nearE && nearS) return 'se'
-    if (nearE) return 'e'
-    if (nearS) return 's'
+  /** Какой край или угол окна под курсором — или null. Углы важнее краёв. */
+  private resizeEdge(win: Win, x: number, y: number): 'e' | 'w' | 'n' | 's' | 'ne' | 'nw' | 'se' | 'sw' | null {
+    const nearL = x >= win.x - 3 && x <= win.x + 6
+    const nearR = x >= win.x + win.w - 6 && x <= win.x + win.w + 3
+    // сверху полоса тоньше: первые строки заняты заголовком с кнопками
+    const nearT = y >= win.y - 3 && y <= win.y + 3
+    const nearB = y >= win.y + win.h - 6 && y <= win.y + win.h + 3
+    const inX = x >= win.x && x <= win.x + win.w
+    const inY = y >= win.y && y <= win.y + win.h
+    if (nearR && nearB) return 'se'
+    if (nearL && nearB) return 'sw'
+    if (nearR && nearT) return 'ne'
+    if (nearL && nearT) return 'nw'
+    if (nearR && inY) return 'e'
+    if (nearL && inY) return 'w'
+    if (nearB && inX) return 's'
+    if (nearT && inX) return 'n'
     return null
   }
 

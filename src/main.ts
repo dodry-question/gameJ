@@ -107,7 +107,6 @@ function run(room: Room): void {
   const ndc = new THREE.Vector2()
   let pressed = false
   let overScreen = false
-  let cursorHidden = false
 
   function aim(e: PointerEvent): void {
     ndc.set((e.clientX / window.innerWidth) * 2 - 1, -(e.clientY / window.innerHeight) * 2 + 1)
@@ -115,13 +114,15 @@ function run(room: Room): void {
 
   /**
    * Курсор мыши оставляем системный: у игрока своя чувствительность и размер.
-   * Прячем его только пока крутятся песочные часы загрузки.
+   * Прячем его пока крутятся песочные часы, у краёв окон — стрелки ресайза.
    */
+  let lastCursor = ''
   function syncCursor(): void {
     const hide = overScreen && desktop.isBusy()
-    if (hide === cursorHidden) return
-    cursorHidden = hide
-    host.style.cursor = hide ? 'none' : 'default'
+    const cur = hide ? 'none' : desktop.hoverCursor
+    if (cur === lastCursor) return
+    lastCursor = cur
+    host.style.cursor = cur
   }
 
   host.addEventListener('pointermove', (e) => {
