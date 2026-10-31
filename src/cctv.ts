@@ -21,6 +21,8 @@ import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js'
 import { buildRoom } from './cctv-room'
 import { buildKitchen, KITCHEN_OBSTACLES, KITCHEN } from './cctv-kitchen'
 import type { Kitchen } from './cctv-kitchen'
+import { buildPost } from './cctv-post'
+import type { Post } from './cctv-post'
 
 export type GirlState = 'tied' | 'idle' | 'pace' | 'knock' | 'run' | 'toKitchen' | 'kitchen' | 'gone'
 
@@ -149,8 +151,10 @@ export class Cctv {
   private lamp: THREE.PointLight
   /** Кухня за коридором: объекты и лампа. */
   private kitchen: Kitchen
-  /** Какой камерой смотрим: 04 — комната 4, 05 — кухня. */
-  private view: '04' | '05' = '04'
+  /** Пост охраны: пустая комната, оживающая после power.local. */
+  private post: Post
+  /** Какой камерой смотрим: 04 — комната 4, 05 — кухня, 01 — пост охраны. */
+  private view: '04' | '05' | '01' = '04'
   /** Кольца верёвки на запястьях: вяжутся к рукам, пока девушка привязана. */
   private wristRopes: THREE.Mesh[] = []
   private handA = new THREE.Vector3()
@@ -266,6 +270,13 @@ export class Cctv {
     fov: 64,
   }
 
+  /** Камера поста охраны: угол под потолком, весь пульт в кадре. */
+  static readonly CAM01 = {
+    pos: [10.1, 2.15, -1.95] as [number, number, number],
+    at: [7.7, 0.8, -4.3] as [number, number, number],
+    fov: 60,
+  }
+
   /** Видит ли камера точку (x, z) — для радара на карте. */
   sees(x: number, z: number): boolean {
     const v = Cctv.CAM
@@ -311,6 +322,7 @@ export class Cctv {
     this.gapLight = room.gapLight
     this.dust = room.dust
     this.kitchen = buildKitchen(this.scene)
+    this.post = buildPost(this.scene)
     this.loadGirl()
     this.loadManiac()
     // Отладочный доступ к сцене — для tools/rig-axes.mjs и tools/shot-*.mjs.
@@ -515,19 +527,34 @@ export class Cctv {
     return this.state === 'toKitchen' || this.state === 'kitchen'
   }
 
+  /**
+   * Питание линий камер: до победы на power.local узел 01 мёртв, узел 05
+   * не подключается (ретранслятор обесточен), даже когда она уже в кухне.
+   */
+  private power = false
+  get powerReady(): boolean {
+    return this.power
+  }
+  powerOn(): void {
+    if (!this.power) {
+      this.power = true
+      this.events.push('powerOn')
+    }
+  }
+
   /** Принтер прямо сейчас печатает — по этому включается звук. */
   get printerBusy(): boolean {
     return this.kitchen.printing
   }
 
   /** Смотреть этим каналом: переключает ракурс камеры. */
-  setView(view: '04' | '05'): void {
+  setView(view: '04' | '05' | '01'): void {
     if (this.view === view) return
     this.view = view
     this.applyCam()
   }
 
-  get viewNow(): '04' | '05' {
+  get viewNow(): '04' | '05' | '01' {
     return this.view
   }
 
@@ -542,7 +569,7 @@ export class Cctv {
   }
 
   private applyCam(): void {
-    const v = this.view === '05' ? Cctv.CAM05 : Cctv.CAM
+    const v = this.view === '05' ? Cctv.CAM05 : this.view === '01' ? Cctv.CAM01 : Cctv.CAM
     this.camera.fov = v.fov
     this.camera.position.set(...v.pos)
     this.camera.lookAt(...v.at)
@@ -781,6 +808,8 @@ export class Cctv {
 
     // кухня живёт своей жизнью, даже когда её не смотрят
     this.kitchen.update(dt, this.time)
+    // пост охраны: помехи пульта, часы, лампа
+    this.post.update(dt, this.time)
     // лампа моргнула — она вздрагивает (только живая, не в кино провала)
     const lampOn = this.kitchen.lampOn
     if (this.lampPrev && !lampOn && this.state === 'kitchen' && this.attackT < 0) {

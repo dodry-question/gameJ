@@ -12,6 +12,7 @@ import type { App } from '../app'
 import type { Sound } from '../../audio'
 import { LockGame } from './lock-game'
 import { PairsGame, PrintSite } from './pairs-game'
+import { PowerGame } from './power-game'
 import { writeClipboard } from '../clipboard'
 
 type Page =
@@ -26,6 +27,7 @@ type Page =
   | 'lock'
   | 'pairs'
   | 'print'
+  | 'power'
   | 'denied'
   | 'error'
   | 'external'
@@ -50,6 +52,7 @@ const URLS = {
   lock: 'http://lockreset.local/',
   pairs: 'http://pairs.local/',
   print: 'http://print.local/',
+  power: 'http://power.local/',
   error: 'http://192.168.0.13/gate/',
 } as const
 
@@ -110,6 +113,8 @@ export class Browser implements App {
   private game: LockGame
   /** Перехват потока: печать пароля и провал уходят в рабочий стол. */
   private pairs: PairsGame
+  /** power.local: релейный щит, возвращающий питание линиям камер. */
+  private power: PowerGame
   /** print.local: строка пароля и кнопка «Печать». */
   private printSite: PrintSite
   /** Вызывается, когда мини-игра сняла блокировку двери. */
@@ -120,9 +125,12 @@ export class Browser implements App {
   onPrintCode?: (code: string) => void
   /** Пароль выхода показан на сайте — дверь кухни его запомнит. */
   onPassword?: (code: string) => void
+  /** Щит дал питание: рабочий стол оживляет узел 01 и ретранслятор кухни. */
+  onPowerWin?: () => void
   /** Гейты по этапам: играющие узлы отвечают только «по сюжету». */
   canOpenLock?: () => boolean
   canOpenPairs?: () => boolean
+  canOpenPower?: () => boolean
 
   constructor(sound: Sound) {
     this.sound = sound
@@ -131,6 +139,8 @@ export class Browser implements App {
     this.pairs = new PairsGame(sound)
     this.pairs.onFail = () => this.onPairsFail?.()
     this.pairs.onPassword = (code) => this.onPassword?.(code)
+    this.power = new PowerGame(sound)
+    this.power.onWin = () => this.onPowerWin?.()
     this.printSite = new PrintSite(sound)
     this.printSite.onPrint = (code) => this.onPrintCode?.(code)
     ;(window as unknown as { __browser?: Browser }).__browser = this
@@ -198,6 +208,9 @@ export class Browser implements App {
       case 'print':
         this.drawPrint(ctx, page)
         break
+      case 'power':
+        this.drawPower(ctx, page)
+        break
       case 'denied':
         this.drawDenied(ctx, page)
         break
@@ -229,6 +242,7 @@ export class Browser implements App {
     }
     if (this.page === 'lock') return this.game.tick()
     if (this.page === 'pairs') return this.pairs.tick()
+    if (this.page === 'power') return this.power.tick()
     return false
   }
 
@@ -262,6 +276,7 @@ export class Browser implements App {
     if (page === 'lock') return 'панель сброса замка'
     if (page === 'pairs') return 'перехват потока'
     if (page === 'print') return 'служба печати'
+    if (page === 'power') return 'релейный щит 3B'
     if (page === 'denied') return 'доступ запрещён'
     return 'готово'
   }
@@ -290,6 +305,9 @@ export class Browser implements App {
     }
     if (low.startsWith('http://print.local') || low.startsWith('https://print.local')) {
       return this.canOpenPairs?.() ? 'print' : 'denied'
+    }
+    if (low.startsWith('http://power.local') || low.startsWith('https://power.local')) {
+      return this.canOpenPower?.() ? 'power' : 'denied'
     }
     if (low.startsWith('http://intranet.local') || low.startsWith('https://intranet.local')) {
       const path = low.replace(/^https?:\/\/intranet\.local/, '').split(/[?#]/)[0]
@@ -1303,6 +1321,33 @@ export class Browser implements App {
     this.pairs.draw(ctx, { x: p.x, y: p.y + head, w: p.w, h: p.h - head })
   }
 
+  /** Страница power.local: релейный щит с синусоидой и рубильниками. */
+  private drawPower(ctx: CanvasRenderingContext2D, p: Rect): void {
+    fill(ctx, p, '#050d08')
+
+    const head = 26
+    fill(ctx, { x: p.x, y: p.y, w: p.w, h: head }, '#08140c')
+    ctx.strokeStyle = 'rgba(126, 154, 132, 0.35)'
+    ctx.beginPath()
+    ctx.moveTo(p.x, p.y + head - 0.5)
+    ctx.lineTo(p.x + p.w, p.y + head - 0.5)
+    ctx.stroke()
+    setFont(ctx, 11, true)
+    ctx.fillStyle = '#9fd39f'
+    ctx.textBaseline = 'middle'
+    ctx.fillText('РЕЛЕЙНЫЙ ЩИТ 3B · power.local', p.x + 12, p.y + head / 2 + 1)
+
+    if (this.loading > 0) {
+      text(ctx, 'соединение…', p.x + p.w / 2, p.y + head + (p.h - head) / 2, {
+        size: 12,
+        color: '#5f6f62',
+        align: 'center',
+      })
+      return
+    }
+    this.power.draw(ctx, { x: p.x, y: p.y + head, w: p.w, h: p.h - head })
+  }
+
   /** Страница print.local: строка пароля и кнопка «Печать». */
   private drawPrint(ctx: CanvasRenderingContext2D, p: Rect): void {
     fill(ctx, p, '#08110c')
@@ -1522,6 +1567,7 @@ export class Browser implements App {
     this.selectAll = false
     if (this.page === 'lock' && this.game.click(x, y)) return
     if (this.page === 'pairs' && this.pairs.click(x, y)) return
+    if (this.page === 'power' && this.power.click(x, y)) return
     if (this.page === 'print' && this.printSite.click(x, y)) return
     for (let i = this.hits.length - 1; i >= 0; i--) {
       if (inside(this.hits[i].r, x, y)) {
@@ -1529,5 +1575,15 @@ export class Browser implements App {
         return
       }
     }
+  }
+
+  /** Протяжка мышью: ползунки релейного щита. */
+  drag(x: number, _y: number, _r: Rect): void {
+    if (this.page === 'power') this.power.drag(x, _y)
+  }
+
+  /** Кнопка отпущена: закончить протяжку ползунка. */
+  release(): void {
+    this.power.release()
   }
 }

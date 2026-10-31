@@ -38,7 +38,7 @@ export class CameraFeed {
   private debugKitchen = false
   private noise: HTMLCanvasElement
   /** Какой канал смотрим: 04 — комната 4, 05 — кухня. */
-  private channel: '04' | '05' = '04'
+  private channel: '04' | '05' | '01' = '04'
   /** Режим скана (TAB): рамки и подписи на объектах кухни. */
   private scan = false
   /** Открытое меню команд: точка на экране и строки. */
@@ -70,12 +70,12 @@ export class CameraFeed {
   }
 
   /** Канал, который сейчас подключён — для подписей в шапке. */
-  get channelNow(): '04' | '05' {
+  get channelNow(): '04' | '05' | '01' {
     return this.channel
   }
 
   /** Узел на карте выбран: переключаем ракурс сцены. */
-  setChannel(ch: '04' | '05'): void {
+  setChannel(ch: '04' | '05' | '01'): void {
     if (this.channel === ch) return
     this.channel = ch
     // cctv ленивый: без первого тика он ещё null, и ракурс не переключится
@@ -262,8 +262,9 @@ export class CameraFeed {
     setFont(ctx, 11, true)
     ctx.fillStyle = '#8fd08f'
     ctx.textBaseline = 'middle'
-    const camLabel = this.channel === '05' ? 'CAM 05' : 'CAM 04'
-    const placeLabel = this.channel === '05' ? 'КУХНЯ, БЛОК C' : 'КОМНАТА 4, БЛОК C'
+    const camLabel = `CAM ${this.channel}`
+    const placeLabel =
+      this.channel === '05' ? 'КУХНЯ, БЛОК C' : this.channel === '01' ? 'ПОСТ ОХРАНЫ, БЛОК C' : 'КОМНАТА 4, БЛОК C'
     ctx.fillText(camLabel, head.x + 2, head.y + head.h / 2)
     ctx.fillStyle = '#c9ccc6'
     ctx.fillText(`· ${placeLabel}`, head.x + 62, head.y + head.h / 2)
@@ -289,48 +290,56 @@ export class CameraFeed {
       return
     }
 
-    // кнопка слева: уведомление почты в правом нижнем углу не перекрывает её
-    const btn: Rect = { x: r.x + 10, y: r.y + r.h - 40, w: 202, h: 30 }
-    const enabled = this.phase === 'ready' || this.phase === 'untied'
-    panel(ctx, btn, enabled, 2)
-    setFont(ctx, 13, true)
-    ctx.fillStyle = enabled ? '#1d3a1d' : '#6d6d66'
-    ctx.textAlign = 'center'
-    const label =
-      this.phase === 'locked'
-        ? 'ЗАБЛОКИРОВАНО'
-        : this.phase === 'ready'
-          ? 'ОТВЯЗАТЬ'
-          : this.phase === 'untied'
-            ? 'ОТКРЫТЬ ДВЕРЬ'
-            : 'ДВЕРЬ ОТКРЫТА'
-    ctx.fillText(label, btn.x + btn.w / 2, btn.y + btn.h / 2)
-    ctx.textAlign = 'left'
+    // кнопка слева действует только в комнате 4: на посту охраны девочки нет
+    if (this.channel !== '01') {
+      const btn: Rect = { x: r.x + 10, y: r.y + r.h - 40, w: 202, h: 30 }
+      const enabled = this.phase === 'ready' || this.phase === 'untied'
+      panel(ctx, btn, enabled, 2)
+      setFont(ctx, 13, true)
+      ctx.fillStyle = enabled ? '#1d3a1d' : '#6d6d66'
+      ctx.textAlign = 'center'
+      const label =
+        this.phase === 'locked'
+          ? 'ЗАБЛОКИРОВАНО'
+          : this.phase === 'ready'
+            ? 'ОТВЯЗАТЬ'
+            : this.phase === 'untied'
+              ? 'ОТКРЫТЬ ДВЕРЬ'
+              : 'ДВЕРЬ ОТКРЫТА'
+      ctx.fillText(label, btn.x + btn.w / 2, btn.y + btn.h / 2)
+      ctx.textAlign = 'left'
 
-    text(ctx, 'пульт: клавиша 04 · поток 12 к/с', r.x + r.w - 10, r.y + r.h - 22, {
-      size: 11,
-      color: '#6f746d',
-      align: 'right',
-    })
-
-    if (this.phase === 'ready') {
-      this.hits.push({
-        r: btn,
-        fn: () => {
-          this.phase = 'untied'
-          this.cctv?.untie()
-          this.sound.open()
-        },
-      })
-    } else if (this.phase === 'untied') {
-      this.hits.push({
-        r: btn,
-        fn: () => {
-          if (this.onUnlock) this.onUnlock()
-          else this.unlock()
-        },
-      })
+      if (this.phase === 'ready') {
+        this.hits.push({
+          r: btn,
+          fn: () => {
+            this.phase = 'untied'
+            this.cctv?.untie()
+            this.sound.open()
+          },
+        })
+      } else if (this.phase === 'untied') {
+        this.hits.push({
+          r: btn,
+          fn: () => {
+            if (this.onUnlock) this.onUnlock()
+            else this.unlock()
+          },
+        })
+      }
     }
+
+    text(
+      ctx,
+      this.channel === '01' ? 'пульт: клавиша 01 · поток 12 к/с' : 'пульт: клавиша 04 · поток 12 к/с',
+      r.x + r.w - 10,
+      r.y + r.h - 22,
+      {
+        size: 11,
+        color: '#6f746d',
+        align: 'right',
+      },
+    )
   }
 
   /** Проявление кадра сверху вниз: мутные полосы, шум и счётчик. */

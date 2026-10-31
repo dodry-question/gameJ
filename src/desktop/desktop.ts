@@ -13,6 +13,7 @@ import { Notepad } from './apps/notepad'
 import { Tds } from './apps/tds'
 import type { Sound } from '../audio'
 import { getCctv, WALK_S } from '../cctv'
+import { writeClipboard } from './clipboard'
 
 export const DESKTOP_W = 960
 export const DESKTOP_H = 720
@@ -214,6 +215,10 @@ export class Desktop {
   private breathStarted = false
   /** Дыхание и камерная шина уже погашены на входе в кино (один раз). */
   private cineMuted = false
+  /** Отладка ?power уже отработала. */
+  private debugPowerDone = false
+  /** Сколько раз игрок кликал обесточенный узел: блокнот раскроется один раз. */
+  private powerHints = 0
   /** Сколько строк [!!] терминала уже озвучено ошибкой. */
   private cmdSounds = 0
   /** Загрузочный экран Win2000: играет один раз при старте, клик пропускает. */
@@ -287,6 +292,11 @@ export class Desktop {
     if (!this.debugPairsDone && location.search.includes('pairs') && getCctv().loaded) {
       this.debugPairsDone = true
       this.debugOpenPairs()
+    }
+    // Отладка ?power: питание линий считается поданным сразу (проверки камеры 01).
+    if (!this.debugPowerDone && location.search.includes('power') && getCctv().loaded) {
+      this.debugPowerDone = true
+      this.powerRestored()
     }
 
     if (this.pending && now >= this.pending.end) {
@@ -554,9 +564,11 @@ export class Desktop {
       browser.onPairsFail = () => this.pairsLost()
       browser.onPrintCode = (code) => this.printCode(code)
       browser.onPassword = (code) => getCctv().setExitCode(code)
+      browser.onPowerWin = () => this.powerRestored()
       // игровые узлы открываются только «по сюжету»: иначе софт-лок
       browser.canOpenLock = () => this.cameraAccess
       browser.canOpenPairs = () => getCctv().kitchenReady
+      browser.canOpenPower = () => this.cameraAccess
       // ?pairs: страница задаётся до открытия окна — оно ещё «грузится»
       if (this.pendingBrowserPage) {
         browser.debugOpenPage(this.pendingBrowserPage)
@@ -571,6 +583,7 @@ export class Desktop {
       if (this.doorUnlocked) tds.doorOpened()
       tds.onFirstView = () => this.triggerThreat()
       tds.onDoorRequest = () => this.openDoorNote()
+      tds.onPowerHint = () => this.powerHint()
       return tds
     }
     if (key === 'notepad') return new Notepad()
@@ -1556,6 +1569,29 @@ export class Desktop {
     this.dirty = true
   }
 
+  /**
+   * Щит на power.local дал питание: оживают узел 01 (пост охраны) и
+   * ретранслятор кухни — удержание узла 05 теперь подключает камеру.
+   */
+  private powerRestored(): void {
+    getCctv().powerOn()
+    this.appendNote('Щит 3B: питание подано — узел 01 (пост охраны) в сети')
+    this.dirty = true
+  }
+
+  /**
+   * Клик по обесточенному узлу в TDS: адрес панели питания уходит в буфер,
+   * в заметки пишется строка. Блокнот раскрывается только на первую
+   * подсказку — дальше адрес и так висит в сообщении терминала.
+   */
+  private powerHint(): void {
+    writeClipboard('http://power.local/')
+    this.powerHints++
+    if (this.powerHints === 1) {
+      this.appendNote('Питание линий камер: панель http://power.local — релейный щит 3B')
+    }
+  }
+
   /** Кино провала: зритель смотрит камеру 05, окно терминала залочено. */
   private throwToCamera(): void {
     let tds = this.cache.get('tds')
@@ -2205,6 +2241,7 @@ export class Desktop {
   debugOpenCamera(): void {
     // отладка = вся история уже прошла: гейты игровых узлов тоже открыты
     this.cameraAccess = true
+    getCctv().powerOn()
     const app = new Tds(this.sound)
     app.setAccess(true)
     app.onDoorRequest = () => this.openDoorNote()

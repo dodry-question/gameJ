@@ -7,7 +7,7 @@ import { mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-const url = process.argv[2] ?? 'http://127.0.0.1:5175/?ui&cam&kitchen'
+const url = process.argv[2] ?? 'http://127.0.0.1:5175/?ui&cam&kitchen&power'
 const out = process.argv[3] ?? join(tmpdir(), 'opencode', 'kitchen')
 mkdirSync(out, { recursive: true })
 

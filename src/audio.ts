@@ -380,6 +380,40 @@ export class Sound {
     this.tone(220, 0.8, 'sawtooth', 0.05, 38)
   }
 
+  /** Щелчок реле на щите power.local: глухой стук + короткий звон контакта. */
+  relay(): void {
+    const ctx = this.ctx
+    const out = this.master
+    if (!ctx || !out) return
+    const t = ctx.currentTime + 0.003
+    // стук якоря: низкий синус с быстрым спадом
+    const osc = ctx.createOscillator()
+    const og = ctx.createGain()
+    osc.type = 'sine'
+    osc.frequency.setValueAtTime(120, t)
+    osc.frequency.exponentialRampToValueAtTime(52, t + 0.07)
+    og.gain.setValueAtTime(0.28, t)
+    og.gain.exponentialRampToValueAtTime(0.001, t + 0.11)
+    osc.connect(og).connect(out)
+    osc.start(t)
+    osc.stop(t + 0.13)
+    // звон контакта: короткий металлический шум
+    if (this.noise) {
+      const src = ctx.createBufferSource()
+      src.buffer = this.noise
+      const bp = ctx.createBiquadFilter()
+      bp.type = 'bandpass'
+      bp.frequency.value = 2900
+      bp.Q.value = 6
+      const ng = ctx.createGain()
+      ng.gain.setValueAtTime(0.09, t)
+      ng.gain.exponentialRampToValueAtTime(0.001, t + 0.05)
+      src.connect(bp).connect(ng).connect(out)
+      src.start(t)
+      src.stop(t + 0.06)
+    }
+  }
+
   // ── пасхалка «Музыка» ────────────────────────────────────────────
 
   private song: AudioBuffer | null = null

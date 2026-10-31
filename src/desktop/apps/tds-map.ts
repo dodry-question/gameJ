@@ -2,8 +2,9 @@
  * План блока C в терминале TDS: комнаты, коридор, камеры и радар.
  *
  * Пока объект в секторе камеры 04 — красная метка горит, после потери она
- * медленно гаснет на последнем замеченном месте. Узлы 01–03 нарисованы для
- * антуража: связи с ними нет, войти можно только в камеру 04.
+ * медленно гаснет на последнем замеченном месте. Узел 01 (пост охраны)
+ * оживает после подачи питания на power.local; узел 05 — когда девушка
+ * дойдёт до кухни и линия под напряжением. Узлы 02–03 — антураж.
  */
 import { fill, panel, setFont } from '../draw'
 import type { Rect } from '../draw'
@@ -20,7 +21,7 @@ export type Cam = {
 }
 
 export const CAMS: Cam[] = [
-  { id: '01', name: 'ХОЛЛ', online: false, fx: 0.14, fy: 0.6 },
+  { id: '01', name: 'ПОСТ ОХРАНЫ', online: false, fx: 0.14, fy: 0.6 },
   { id: '02', name: 'КОРИДОР', online: false, fx: 0.44, fy: 0.19 },
   { id: '03', name: 'ЛЕСТНИЦА', online: false, fx: 0.91, fy: 0.43 },
   { id: '04', name: 'КОМНАТА 4', online: true, fx: 0, fy: 0 },
@@ -85,10 +86,28 @@ export class TdsMap {
     return null
   }
 
-  /** Узел 05 оживает, когда девушка добралась до кухни. */
+  /**
+   * Статус узла: online — в сети; power — камера есть, но линия обесточена
+   * (питание подаётся на power.local); dead — связи нет и не будет.
+   */
+  status(cam: Cam): 'online' | 'power' | 'dead' {
+    const cctv = getCctv()
+    if (cam.id === '01') return cctv.powerReady ? 'online' : 'power'
+    if (cam.id === '05') {
+      if (!cctv.kitchenReady) return 'dead'
+      return cctv.powerReady ? 'online' : 'power'
+    }
+    return cam.online ? 'online' : 'dead'
+  }
+
+  /** Узел в сети: 04 всегда после установки, 01 и 05 — после подачи питания. */
   isOnline(cam: Cam): boolean {
-    if (cam.id === '05') return getCctv().kitchenReady
-    return cam.online
+    return this.status(cam) === 'online'
+  }
+
+  /** Камера жива, но обесточена: клик подскажет про power.local. */
+  isPower(cam: Cam): boolean {
+    return this.status(cam) === 'power'
   }
 
   draw(ctx: CanvasRenderingContext2D, area: Rect, hold: HoldState | null, message: string | null): void {
@@ -331,12 +350,16 @@ export class TdsMap {
     }
 
     setFont(ctx, 9)
-    const online = this.isOnline(cam)
-    ctx.fillStyle = online ? '#a9c9ae' : '#6f7d72'
+    const st = this.status(cam)
+    ctx.fillStyle = st === 'online' ? '#a9c9ae' : st === 'power' ? '#8a7f5c' : '#6f7d72'
     ctx.textAlign = 'center'
     ctx.fillText(cam.name, cx, r.y + r.h + 10)
-    ctx.fillStyle = online ? '#2c7a2c' : '#6b5a3a'
-    ctx.fillText(online ? 'В СЕТИ' : 'НЕТ СВЯЗИ', cx, r.y + r.h + 21)
+    ctx.fillStyle = st === 'online' ? '#2c7a2c' : st === 'power' ? '#b39a4c' : '#6b5a3a'
+    ctx.fillText(
+      st === 'online' ? 'В СЕТИ' : st === 'power' ? 'НЕТ ПИТАНИЯ' : 'НЕТ СВЯЗИ',
+      cx,
+      r.y + r.h + 21,
+    )
 
     // удержание: кольцо заполняется по кругу
     if (p > 0) {

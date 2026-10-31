@@ -31,6 +31,8 @@ export class Tds implements App {
   onFirstView?: () => void
   /** Нажата «Открыть дверь»: терминал отдаёт адрес панели сброса. */
   onDoorRequest?: () => void
+  /** Клик по обесточенному узлу: рабочий стол скопирует адрес power.local. */
+  onPowerHint?: () => void
 
   private screen: Screen = 'map'
   private map = new TdsMap()
@@ -82,7 +84,7 @@ export class Tds implements App {
   }
 
   /** Кино провала: рабочий стол силой открывает эфир нужного канала. */
-  forceChannel(ch: '04' | '05'): void {
+  forceChannel(ch: '04' | '05' | '01'): void {
     this.screen = 'feed'
     this.firstViewed = true
     this.feed.setChannel(ch)
@@ -166,8 +168,19 @@ export class Tds implements App {
     const cam = this.map.hit(x, y)
     if (!cam) return
     if (!this.map.isOnline(cam)) {
-      this.say(`КАМЕРА ${cam.id} · НЕТ СВЯЗИ`)
-      this.sound.error()
+      if (this.map.isPower(cam)) {
+        // камера есть, но линия обесточена: подсказываем панель питания
+        this.say(
+          cam.id === '01'
+            ? 'КАМЕРА 01 · ЛИНИЯ ОБЕСТОЧЕНА · ПАНЕЛЬ: power.local'
+            : 'РЕТРАНСЛЯТОР ОБЕСТОЧЕН · ПИТАНИЕ: power.local',
+        )
+        this.sound.error()
+        this.onPowerHint?.()
+      } else {
+        this.say(`КАМЕРА ${cam.id} · НЕТ СВЯЗИ`)
+        this.sound.error()
+      }
       return
     }
     const now = performance.now()
@@ -212,8 +225,9 @@ export class Tds implements App {
   }
 
   private beginConnect(): void {
-    // канал выбирается по узлу, который держали: 04 — комната 4, 05 — кухня
-    this.feed.setChannel((this.hold?.id as '04' | '05') ?? '04')
+    // канал выбирается по узлу, который держали: 04 — комната 4, 05 — кухня,
+    // 01 — пост охраны
+    this.feed.setChannel((this.hold?.id as '04' | '05' | '01') ?? '04')
     this.hold = null
     this.screen = 'loading'
     this.connectAt = performance.now() + CONNECT_MS
@@ -280,10 +294,14 @@ export class Tds implements App {
         : this.screen === 'loading'
           ? camId === '05'
             ? 'ПОДКЛЮЧЕНИЕ · КУХНЯ'
-            : 'ПОДКЛЮЧЕНИЕ · КОМНАТА 4'
+            : camId === '01'
+              ? 'ПОДКЛЮЧЕНИЕ · ПОСТ ОХРАНЫ'
+              : 'ПОДКЛЮЧЕНИЕ · КОМНАТА 4'
           : camId === '05'
             ? 'КОМНАТА 5 · КУХНЯ · БЛОК C'
-            : 'КОМНАТА 4 · БЛОК C'
+            : camId === '01'
+              ? 'ПОСТ ОХРАНЫ · БЛОК C'
+              : 'КОМНАТА 4 · БЛОК C'
     ctx.fillText(sub, x, cy + 12)
 
     // справа: часы и лампа связи
@@ -365,7 +383,7 @@ export class Tds implements App {
     setFont(ctx, 15, true)
     ctx.fillStyle = '#cfe4d2'
     ctx.textAlign = 'center'
-    ctx.fillText('ПОДКЛЮЧЕНИЕ К КАМЕРЕ 04', cx, cy + 78)
+    ctx.fillText(`ПОДКЛЮЧЕНИЕ К КАМЕРЕ ${this.feed.channelNow}`, cx, cy + 78)
     setFont(ctx, 10)
     ctx.fillStyle = '#7e8c80'
     ctx.fillText('канал 192.168.0.13 · поток 320×240', cx, cy + 96)
