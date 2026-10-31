@@ -5,14 +5,16 @@
  *
  * Девушка привязана к стулу лицом от двери (в камеру), после освобождения
  * встаёт, бродит, стучит в дверь и убегает. Состояния: tied → pace/knock/idle
- * → run → gone.
+ * → run → toKitchen → kitchen → gone.
  *
- * Анимация процедурная, но слоистая: базовая поза → дыхание → цикл шага (фаза
- * набегает от пройденного пути, а не от времени) → шум-«живость» → тремор от
- * страха. Позы задаются в осях комнаты (наклон/поворот/крен), поэтому одинаково
- * читаются и сидя, и в беге, и в рывке; у каждой кости учитывается уже
- * повёрнутый родитель, так что вторичное движение (голова запаздывает, корпус
- * скручивается против бёдер) считается той же арифметикой.
+ * Анимация двухслойная. База — мокап-клипы Mixamo (ходьба/бег/стойка, качаются
+ * public/cctv/anims/*.fbx без скина) через AnimationMixer с кроссфейдами; темп
+ * шага масштабируется от реальной скорости корня, чтобы ступни не скользили.
+ * Поверх — процедурные дельты из rig-механики: тремор страха, взгляд, живые
+ * жесты, удары в дверь, действия по поручениям. Позы и дельты задаются в осях
+ * комнаты (наклон/поворот/крен); у каждой кости учитывается уже повёрнутый
+ * родитель. Состояния без мокапа (привязанность, подъём, пятиться под угрозой)
+ * остались целиком процедурными.
  */
 import * as THREE from 'three'
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js'
@@ -174,6 +176,19 @@ export class Cctv {
   /** Когда снова выбрать точку блуждания по кухне. */
   private wanderNext = 0
 
+  // ── мокап-слой: клипы Mixamo через AnimationMixer ──────────────────
+  /** Базовое движение (ходьба/бег/стойка) играют мокап-клипы; процедурные
+   * слои (тремор, взгляд, жесты, удары в дверь) ложатся поверх дельтами. */
+  private mixer: THREE.AnimationMixer | null = null
+  private maniacMixer: THREE.AnimationMixer | null = null
+  private actions = new Map<string, THREE.AnimationAction>()
+  private maniacActions = new Map<string, THREE.AnimationAction>()
+  /** Какой клип играет сейчас у девушки: walk/run/idle или null (процедура). */
+  private activeClip: string | null = null
+  private maniacClip: string | null = null
+  /** Реальная скорость девушки, м/с — по ней масштабируется темп шага. */
+  private speed = 0
+
   // ── кухня: команды оператора ──────────────────────────────────────
   /** Текущее поручение: к какому объекту и что делать. */
   private task: {
@@ -213,6 +228,7 @@ export class Cctv {
   private deltaWorld = new THREE.Quaternion()
   private tmpA = new THREE.Quaternion()
   private tmpB = new THREE.Quaternion()
+  private tmpC = new THREE.Quaternion()
   /** Единственная камера в комнате: общий вид из правого верхнего угла. */
   static readonly CAM = {
     pos: [1.7, 2.2, 1.4] as [number, number, number],
@@ -315,7 +331,67 @@ export class Cctv {
         this.maniacDepth.set(name, chain.length)
       })
       this.kitchen.maniac.add(fbx)
+      // его скелет — тот же mixamorig: клипы встают напрямую
+      this.maniacMixer = new THREE.AnimationMixer(fbx)
+      const files: [string, string][] = [
+        ['walk', 'cctv/anims/Walking.fbx'],
+        ['stab', 'cctv/anims/Stabbing.fbx'],
+      ]
+      for (const [key, url] of files) {
+        new FBXLoader().load(url, (cf) => {
+          const clip = cf.animations[0]
+          if (!clip || !this.maniacMixer) return
+          const action = this.maniacMixer.clipAction(clip)
+          if (key === 'stab') {
+            action.loop = THREE.LoopOnce
+            action.clampWhenFinished = true
+          }
+          this.maniacActions.set(key, action)
+        })
+      }
     })
+  }
+
+  /** Мокап-клипы девушки: Without Skin, тот же скелет — без ретаргетинга. */
+  private loadGirlClips(): void {
+    if (!this.mixer) return
+    const files: [string, string][] = [
+      ['walk', 'cctv/anims/Walking.fbx'],
+      ['run', 'cctv/anims/Running.fbx'],
+      ['idle', 'cctv/anims/Breathing Idle.fbx'],
+    ]
+    for (const [key, url] of files) {
+      new FBXLoader().load(url, (fbx) => {
+        const clip = fbx.animations[0]
+        if (!clip || !this.mixer) return
+        this.actions.set(key, this.mixer.clipAction(clip))
+      })
+    }
+  }
+
+  /** Плавно переключить базовый клип девушки; null — уходим в процедуру. */
+  private playClip(key: 'walk' | 'run' | 'idle' | null, fade = 0.32): void {
+    if (key === this.activeClip) return
+    // клип ещё не догрузился — остаёмся на прежнем слое, ключ не запираем
+    if (key && !this.actions.has(key)) return
+    this.activeClip = key
+    if (!this.mixer) return
+    for (const [k, a] of this.actions) {
+      if (k === key) a.reset().fadeIn(fade).play()
+      else if (a.isRunning()) a.fadeOut(fade)
+    }
+  }
+
+  /** Переключение клипа маньяка (ходьба ↔ выпад ножом). */
+  private playManiacClip(key: 'walk' | 'stab' | null, fade = 0.2): void {
+    if (key === this.maniacClip) return
+    if (key && !this.maniacActions.has(key)) return
+    this.maniacClip = key
+    if (!this.maniacMixer) return
+    for (const [k, a] of this.maniacActions) {
+      if (k === key) a.reset().fadeIn(fade).play()
+      else if (a.isRunning()) a.fadeOut(fade)
+    }
   }
 
   private loadGirl(): void {
@@ -357,6 +433,9 @@ export class Cctv {
       this.prev.set(CHAIR.x, 0, CHAIR.z)
       this.girl = fbx
       this.scene.add(fbx)
+      // мокап-слой: клипы качаются фоном и подхватываются по мере загрузки
+      this.mixer = new THREE.AnimationMixer(fbx)
+      this.loadGirlClips()
 
       // верёвка на запястьях: два кольца, каждое повязано вдоль предплечья
       const ropeMat = new THREE.MeshLambertMaterial({ color: 0x9a8452 })
@@ -536,6 +615,37 @@ export class Cctv {
       const a = p[name]
       this.poseOn(rig, name, a[0], a[1], a[2])
     }
+  }
+
+  /**
+   * Дельты поверх текущего поворота кости — то же перенесение в оси комнаты,
+   * что у poseOn, но база не поза покоя, а что миксер уже написал этим кадром.
+   * Так тремор, взгляд и жесты ложатся на мокап, а не затирают его.
+   */
+  private addPoseOn(rig: Rig, p: Pose): void {
+    const names = Object.keys(p).sort((a, b) => (rig.depth.get(a) ?? 0) - (rig.depth.get(b) ?? 0))
+    for (const name of names) {
+      const bone = rig.bones.get(name)
+      if (!bone) continue
+      const a = p[name]
+      const parent = this.parentWorldOn(rig, name)
+      this.euler.set(a[0], a[1], a[2], 'XYZ')
+      this.delta.setFromEuler(this.euler)
+      this.tmpB.copy(rig.root.quaternion).invert()
+      this.deltaWorld.copy(rig.root.quaternion).multiply(this.delta).multiply(this.tmpB)
+      this.tmpC.copy(bone.quaternion)
+      bone.quaternion
+        .copy(parent)
+        .invert()
+        .multiply(this.deltaWorld)
+        .multiply(parent)
+        .multiply(this.tmpC)
+    }
+  }
+
+  /** Дельты поверх клипов девушки. */
+  private addPose(p: Pose): void {
+    this.addPoseOn(this.girlRig, p)
   }
 
   /** Сложить два угла кости покомпонентно. */
@@ -825,6 +935,7 @@ export class Cctv {
     g.position.z = safe.z
     // шаги совпадают с пройденным путём, а не с временем
     const moved = Math.hypot(g.position.x - this.prev.x, g.position.z - this.prev.z)
+    this.speed = dt > 0 ? moved / dt : 0
     this.phase += moved * 4.6
     this.prev.set(g.position.x, 0, g.position.z)
   }
@@ -848,6 +959,7 @@ export class Cctv {
     const breath = Math.sin(t * (1.5 + stress * 1.9) + this.wob(t, 3) * 0.4)
 
     if (this.state === 'tied') {
+      this.playClip(null, 0.2)
       const p: Pose = {}
       this.tiedPose(p, t, dt, breath, stress)
       this.tremor(p, t, stress)
@@ -863,6 +975,7 @@ export class Cctv {
     // Вставание: смесь сидячей и стоячей позы, наклон вперёд и упор руками
     // в колени — так подъём читается как усилие, а не как всплытие.
     if (this.freeT < 1) {
+      this.playClip(null, 0.2)
       const riseBase = this.mix(SIT, STAND, this.freeT)
       const push = Math.sin(this.freeT * Math.PI)
       this.add(riseBase, 'Spine', push * 0.5, 0, 0)
@@ -880,6 +993,7 @@ export class Cctv {
     // Нападение: пятится спиной вперёд (цикл шага реверс), потом застыла
     // лицом к маньяку и дрожит. Спину не ломаем: наклоны минимальные.
     if (this.attackT >= 0) {
+      this.playClip(null, 0.12)
       const p: Pose = { ...STAND }
       this.moveBlend += ((this.backpedal ? 1 : 0) - this.moveBlend) * Math.min(1, dt * 6)
       if (this.backpedal) {
@@ -906,21 +1020,39 @@ export class Cctv {
         (this.state === 'knock' && !nearTarget))
     this.moveBlend += ((moving ? 1 : 0) - this.moveBlend) * Math.min(1, dt * 5)
 
-    const base = this.mix(SIT, STAND, this.freeT)
-
+    // ── базовый слой: мокап-клип ──────────────────────────────────────
     if (moving) {
-      this.walkPose(base, t)
-    } else if (this.state === 'knock') {
-      this.knockPose(base, t, dt, stress)
-    } else {
-      this.standPose(base, t, dt, breath, stress)
+      // в брожении путь слегка неровный, не по линейке
+      if (this.state === 'pace') {
+        this.targetX = -0.25 + Math.sin(t * 0.42) * 0.62 + this.wob(t * 0.5, 5) * 0.05
+        this.targetZ = -0.35 + Math.sin(t * 0.27 + 1.2) * 0.1
+      }
+      // корпус разворачивается туда, куда реально идёт
+      const dx = this.targetX - g.position.x
+      const dz = this.targetZ - g.position.z
+      if (Math.hypot(dx, dz) > 0.16) this.yawTarget = Math.atan2(dx, dz)
+    }
+    const clip = moving ? (this.state === 'run' ? 'run' : 'walk') : 'idle'
+    this.playClip(clip)
+    if (this.mixer) {
+      // темп шага — от реальной скорости: ступни не скользят по полу
+      const action = this.actions.get(clip)
+      if (action) {
+        const nominal = clip === 'run' ? 3.1 : clip === 'walk' ? 1.5 : 1
+        action.timeScale = clamp(this.speed / nominal, 0.5, 1.9)
+      }
+      this.mixer.update(dt)
     }
 
+    // ── процедурные слои поверх мокапа: только дельты ─────────────────
+    const p: Pose = {}
+    if (this.state === 'knock') this.knockDeltas(p, t, dt)
     // действие по поручению: руки и наклон поверх стойки
-    if (this.task && this.task.phase === 'act') this.taskPose(base)
-
-    this.tremor(base, t, stress)
-    this.applyPose(base)
+    if (this.task && this.task.phase === 'act') this.taskPose(p)
+    this.gestureDeltas(p, t)
+    if (!moving && this.state !== 'knock') this.gazeDeltas(p, t, dt)
+    this.tremor(p, t, stress)
+    this.addPose(p)
     this.updateWristRopes()
   }
 
@@ -1097,8 +1229,12 @@ export class Cctv {
     g.position.y += Math.abs(Math.cos(w)) * (run ? 0.04 : 0.022) * this.moveBlend
   }
 
-  /** Стоит у двери и бьётся в неё: серии из трёх ударов, пауза, осмотр. */
-  private knockPose(base: Pose, t: number, dt: number, stress: number): void {
+  /**
+   * Стоит у двери и бьётся в неё: серии из трёх ударов, пауза, осмотр.
+   * Дельты поверх клипа стойки: поднятые к двери руки и подача корпуса
+   * складываются с дыханием мокапа, а не заменяют его.
+   */
+  private knockDeltas(p: Pose, t: number, dt: number): void {
     this.knockT += dt
     // серия: три удара по 0.47 с, потом пауза — ритм неровный, не метроном
     const cycle = this.knockT % 3.4
@@ -1111,35 +1247,74 @@ export class Cctv {
     const shoulder = -1.42 - hit * 0.14
     const elbow = -0.28 + hit * 0.12
     if (right) {
-      base.RightArm = [shoulder, 0, -0.16]
-      base.RightForeArm = [elbow, 0, 0]
-      base.LeftArm = [-1.36, 0, 0.16]
-      base.LeftForeArm = [-0.42, 0, 0]
+      this.add(p, 'RightArm', shoulder, 0, -0.16)
+      this.add(p, 'RightForeArm', elbow, 0, 0)
+      this.add(p, 'LeftArm', -1.36, 0, 0.16)
+      this.add(p, 'LeftForeArm', -0.42, 0, 0)
     } else {
-      base.LeftArm = [shoulder, 0, 0.16]
-      base.LeftForeArm = [elbow, 0, 0]
-      base.RightArm = [-1.36, 0, -0.16]
-      base.RightForeArm = [-0.42, 0, 0]
+      this.add(p, 'LeftArm', shoulder, 0, 0.16)
+      this.add(p, 'LeftForeArm', elbow, 0, 0)
+      this.add(p, 'RightArm', -1.36, 0, -0.16)
+      this.add(p, 'RightForeArm', -0.42, 0, 0)
     }
 
     // бьётся всем телом: корпус и голова подаются в удары
-    base.Spine = [0.12 + hit * 0.07, (right ? -1 : 1) * (0.03 + hit * 0.05), 0]
-    base.Head = [0.05 + hit * 0.06, hit > 0.1 ? 0 : this.wob(t * 0.5, 6) * 0.3, 0]
-    this.add(base, 'Hips', 0, 0, hit * 0.025)
+    this.add(p, 'Spine', 0.12 + hit * 0.07, (right ? -1 : 1) * (0.03 + hit * 0.05), 0)
+    this.add(p, 'Head', 0.05 + hit * 0.06, hit > 0.1 ? 0 : this.wob(t * 0.5, 6) * 0.3, 0)
+    this.add(p, 'Hips', 0, 0, hit * 0.025)
 
     // стоит у двери, лицом к ней
     this.targetX = 0
     this.targetZ = -2.45
     this.yawTarget = Math.PI
-    void stress
   }
 
-  /** Стоит без дела: переминается, вес перекатывается, живые случайные жесты. */
-  private standPose(base: Pose, t: number, dt: number, breath: number, stress: number): void {
+  /**
+   * Живые случайные жесты поверх клипа стойки: машет камере, поёжилась,
+   * теребит свитер. Все величины — дельты от позы покоя: они складываются
+   * с дыханием мокапа.
+   */
+  private gestureDeltas(p: Pose, t: number): void {
     const gst = this.gesture
-    const gp = gst ? clamp((t - gst.start) / gst.dur, 0, 1) : 0
+    if (!gst) return
+    const gp = clamp((t - gst.start) / gst.dur, 0, 1)
 
-    // взгляд: жест задаёт цель, иначе дверь/руки/стороны
+    if (gst.kind === 'wave') {
+      // Рука идёт вперёд, к камере: плечо поднято и чуть повёрнуто к объективу,
+      // предплечье согнуто, ладонь развёрнута в камеру, кисть качается.
+      const up = smooth(clamp(gp / 0.22, 0, 1))
+      const down = 1 - smooth(clamp((gp - 0.76) / 0.22, 0, 1))
+      const raise = up * down
+      const shake = Math.sin((t - gst.start) * 9) * raise
+      this.add(p, 'RightArm', 0, 0.6 * raise, -1.03 * raise)
+      this.add(p, 'RightForeArm', -0.18, -0.8 * raise + shake * 0.1, -1.4 * raise)
+      this.add(p, 'RightHand', 0, 0, shake * 0.5)
+      this.add(p, 'Head', -0.08 * raise, 0, 0.06 * raise)
+      this.add(p, 'Spine', 0, 0.05 * raise, 0)
+      this.yawTarget = this.faceCameraYaw()
+    } else if (gst.kind === 'look') {
+      this.add(p, 'Spine', 0, gst.side * 0.08, 0)
+    } else if (gst.kind === 'shiver') {
+      // плечи к ушам, руки прижаты, мелкая дрожь
+      const sh = Math.sin(Math.PI * gp) ** 0.7
+      this.add(p, 'Spine', 0.1 * sh, 0, 0)
+      this.add(p, 'Head', 0.12 * sh, Math.sin(t * 22) * 0.03 * sh, 0)
+      this.add(p, 'LeftArm', 0, 0, -0.12 * sh)
+      this.add(p, 'RightArm', 0, 0, 0.12 * sh)
+      this.add(p, 'LeftForeArm', -0.3 * sh, 0, 0)
+      this.add(p, 'RightForeArm', -0.3 * sh, 0, 0)
+    } else if (gst.kind === 'fidget') {
+      // переступает на месте и теребит край свитера
+      const sh = Math.sin(Math.PI * gp) ** 0.7
+      this.add(p, 'LeftForeArm', -0.5 * sh, -0.3 * sh, 0)
+      this.add(p, 'RightForeArm', -0.45 * sh, 0.3 * sh, 0)
+      this.add(p, 'Spine', 0.04 * sh, 0, 0)
+    }
+  }
+
+  /** Куда смотрит голова в покое: дельта поверх мокапной стойки. */
+  private gazeDeltas(p: Pose, t: number, dt: number): void {
+    const gst = this.gesture
     if (gst?.kind === 'look') {
       this.gazeTarget = { x: 0.02, y: gst.side * 0.95 }
     } else if (gst?.kind === 'wave') {
@@ -1158,64 +1333,7 @@ export class Cctv {
     }
     this.gaze.x += (this.gazeTarget.x - this.gaze.x) * Math.min(1, dt * 3)
     this.gaze.y += (this.gazeTarget.y - this.gaze.y) * Math.min(1, dt * 3)
-
-    // вес перекатывается с ноги на ногу — медленно и неровно
-    const shift = this.wob(t * 0.4, 7)
-    this.add(base, 'Hips', 0, shift * 0.04, shift * 0.05)
-    base.Spine = [
-      0.05 + breath * (0.012 + stress * 0.02),
-      this.wob(t * 0.5, 9) * 0.05,
-      -shift * 0.03,
-    ]
-    base.Head = [this.gaze.x + breath * 0.02, this.gaze.y, this.wob(t, 4) * 0.04]
-
-    // руки висят и слегка живут; кисти безвольно повёрнуты
-    base.LeftArm = [this.wob(t, 2) * 0.04, 0, 0.08 + shift * 0.03]
-    base.RightArm = [this.wob(t, 6) * 0.04, 0, -0.08 + shift * 0.03]
-    base.LeftForeArm = [-0.18 + this.wob(t * 0.7, 1) * 0.08, 0, 0]
-    base.RightForeArm = [-0.18 + this.wob(t * 0.7, 8) * 0.08, 0, 0]
-
-    // ── живые жесты ──────────────────────────────────────────────────
-    if (gst?.kind === 'wave') {
-      // Рука идёт вперёд, к камере: плечо поднято и чуть повёрнуто к объективу,
-      // предплечье согнуто, ладонь развёрнута в камеру, кисть качается.
-      const up = smooth(clamp(gp / 0.22, 0, 1))
-      const down = 1 - smooth(clamp((gp - 0.76) / 0.22, 0, 1))
-      const raise = up * down
-      const idle = 1 - raise
-      const shake = Math.sin((t - gst.start) * 9) * raise
-      base.RightArm = [this.wob(t, 6) * 0.04 * idle, 0.6 * raise, -0.08 - 1.03 * raise]
-      base.RightForeArm = [
-        (-0.18 + this.wob(t * 0.7, 8) * 0.08) * idle,
-        -0.8 * raise + shake * 0.1,
-        -1.4 * raise,
-      ]
-      base.RightHand = [0, 0, shake * 0.5]
-      base.Head = [base.Head[0] - 0.08 * raise, this.gaze.y, 0.06 * raise]
-      base.Spine = [base.Spine[0], base.Spine[1] + 0.05 * raise, base.Spine[2]]
-      this.yawTarget = this.faceCameraYaw()
-    } else if (gst?.kind === 'look') {
-      base.Spine = [base.Spine[0], base.Spine[1] + gst.side * 0.08, base.Spine[2]]
-    } else if (gst?.kind === 'shiver') {
-      // плечи к ушам, руки прижаты, мелкая дрожь
-      const sh = Math.sin(Math.PI * gp) ** 0.7
-      base.Spine = [base.Spine[0] + 0.1 * sh, base.Spine[1], base.Spine[2]]
-      base.Head = [
-        base.Head[0] + 0.12 * sh,
-        base.Head[1] + Math.sin(t * 22) * 0.03 * sh,
-        base.Head[2],
-      ]
-      base.LeftArm = [base.LeftArm[0], 0, base.LeftArm[2] - 0.12 * sh]
-      base.RightArm = [base.RightArm[0], 0, base.RightArm[2] + 0.12 * sh]
-      base.LeftForeArm = [base.LeftForeArm[0] - 0.3 * sh, 0, 0]
-      base.RightForeArm = [base.RightForeArm[0] - 0.3 * sh, 0, 0]
-    } else if (gst?.kind === 'fidget') {
-      // переступает на месте и теребит край свитера
-      const sh = Math.sin(Math.PI * gp) ** 0.7
-      base.LeftForeArm = [base.LeftForeArm[0] - 0.5 * sh, -0.3 * sh, 0]
-      base.RightForeArm = [base.RightForeArm[0] - 0.45 * sh, 0.3 * sh, 0]
-      base.Spine = [base.Spine[0] + 0.04 * sh, base.Spine[1], base.Spine[2]]
-    }
+    this.add(p, 'Head', this.gaze.x, this.gaze.y, this.wob(t, 4) * 0.04)
 
     // Жест держит её на месте; иначе — просто стоит там, где остановилась,
     // и смотрит к двери (не «подъезжает» к стулу сквозь него).
@@ -1549,36 +1667,41 @@ export class Cctv {
     const tz = g.position.z + 0.4
     m.position.x = (tx - 0) * walk
     m.position.z = KITCHEN.z1 - 0.3 + (tz - (KITCHEN.z1 - 0.3)) * walk
-    // тяжёлая походка: корпус качается и притопывает
-    m.rotation.x = 0.09 + Math.sin(t * 5.6) * 0.05
-    m.position.y = Math.abs(Math.sin(t * 5.6)) * 0.035
-    // настоящий шаг на скелете FBX: ноги от бедра, колени в переносе,
-    // руки в противофазе (в правой нож), корпус слегка скручивается.
-    // Пока FBX не догрузился, шевелим примитивную болванку как запасную.
-    const parts = this.kitchen.maniacParts
-    const cad = t * Math.PI * 2 * 1.5 // полтора шага в секунду
-    const sL = Math.sin(cad)
-    const sR = Math.sin(cad + Math.PI)
-    parts.legL.rotation.x = sL * 0.5
-    parts.legR.rotation.x = sR * 0.5
-    parts.armL.rotation.x = sR * 0.3
-    parts.armR.rotation.x = sL * 0.22
-    parts.torso.rotation.y = sL * 0.06
-    parts.head.rotation.x = Math.sin(cad * 2) * 0.04
-    const rig = this.maniacRig
-    if (rig) {
-      const mp: Pose = {}
-      this.add(mp, 'LeftUpLeg', -sL * 0.5, 0, 0)
-      this.add(mp, 'RightUpLeg', -sR * 0.5, 0, 0)
-      this.add(mp, 'LeftLeg', Math.max(0, -sL) * 0.55, 0, 0)
-      this.add(mp, 'RightLeg', Math.max(0, -sR) * 0.55, 0, 0)
-      this.add(mp, 'LeftArm', sR * 0.35, 0, 0.1)
-      this.add(mp, 'RightArm', sL * 0.3, 0, -0.1)
-      this.add(mp, 'LeftForeArm', -0.2, 0, 0)
-      this.add(mp, 'RightForeArm', -0.4, 0, 0) // в правой руке нож
-      this.add(mp, 'Spine', 0.07, sL * 0.05, 0)
-      this.add(mp, 'Head', Math.sin(cad * 2) * 0.03, 0, 0)
-      this.applyPoseOn(rig, mp)
+    // тяжёлая походка: мокап-клип на замедленном темпе, в последней секунде —
+    // выпад с ножом. Пока FBX не догрузился, шевелим болванку как запасную.
+    if (this.maniacMixer && this.maniacActions.has('walk')) {
+      const a = this.maniacActions.get('walk')
+      if (a) a.timeScale = 0.45
+      this.playManiacClip(t >= WALK_S - 0.9 ? 'stab' : 'walk', 0.12)
+      this.maniacMixer.update(dt)
+    } else {
+      m.rotation.x = 0.09 + Math.sin(t * 5.6) * 0.05
+      m.position.y = Math.abs(Math.sin(t * 5.6)) * 0.035
+      const parts = this.kitchen.maniacParts
+      const cad = t * Math.PI * 2 * 1.5 // полтора шага в секунду
+      const sL = Math.sin(cad)
+      const sR = Math.sin(cad + Math.PI)
+      parts.legL.rotation.x = sL * 0.5
+      parts.legR.rotation.x = sR * 0.5
+      parts.armL.rotation.x = sR * 0.3
+      parts.armR.rotation.x = sL * 0.22
+      parts.torso.rotation.y = sL * 0.06
+      parts.head.rotation.x = Math.sin(cad * 2) * 0.04
+      const rig = this.maniacRig
+      if (rig) {
+        const mp: Pose = {}
+        this.add(mp, 'LeftUpLeg', -sL * 0.5, 0, 0)
+        this.add(mp, 'RightUpLeg', -sR * 0.5, 0, 0)
+        this.add(mp, 'LeftLeg', Math.max(0, -sL) * 0.55, 0, 0)
+        this.add(mp, 'RightLeg', Math.max(0, -sR) * 0.55, 0, 0)
+        this.add(mp, 'LeftArm', sR * 0.35, 0, 0.1)
+        this.add(mp, 'RightArm', sL * 0.3, 0, -0.1)
+        this.add(mp, 'LeftForeArm', -0.2, 0, 0)
+        this.add(mp, 'RightForeArm', -0.4, 0, 0) // в правой руке нож
+        this.add(mp, 'Spine', 0.07, sL * 0.05, 0)
+        this.add(mp, 'Head', Math.sin(cad * 2) * 0.03, 0, 0)
+        this.applyPoseOn(rig, mp)
+      }
     }
 
     const dx = tx - m.position.x

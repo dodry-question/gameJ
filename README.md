@@ -83,8 +83,16 @@ public/sounds/        — эмбиент, dial-up модем, дыхание г�
                         пасхалки: «песенка для малыша» и «мурзик» (музыка маньяка)
 public/images/        — dodry.jpg, avizero.jpg, ilarion.jpg: пасхалки в
                         «Изображениях» (в проводнике зовутся по-русски)
+public/cctv/anims/    — мокап-клипы Mixamo (ходьба, бег, стойка, выпад ножом):
+                        базовый слой анимации героини и маньяка
 docs/                 — нетехнические заметки по джему (частично устарели)
 tools/shot.mjs        — скриншот-тест в Edge (только для разработки)
+tools/mixamo-browser.mjs, tools/mixamo-fetch.mjs — браузер Mixamo через
+                        xray-прокси: логин сохраняется, клипы качаются сразу
+                        в public/cctv/anims/ (`fetch "?запрос" "?Имя" [inplace]`)
+tools/check-mocap.mjs, check-run.mjs, check-maniac.mjs, check-gesture.mjs,
+                        shot-cam-linux.mjs — прогоны анимаций со скриншотами
+                        (Linux, Brave; нужен dev-сервер)
 ```
 
 ## Отладка
