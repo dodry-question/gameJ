@@ -299,6 +299,14 @@ export class Desktop {
       this.powerRestored()
     }
 
+    // Живое зерно ЭЛТ: даже на неподвижном столе монитору нужна перерисовка,
+    // иначе паттерн зерна замирает и картинка становится «мёртвой».
+    const grainNow = performance.now()
+    if (grainNow - this.grainAt > 110) {
+      this.grainAt = grainNow
+      this.dirty = true
+    }
+
     if (this.pending && now >= this.pending.end) {
       const key = this.pending.key
       this.pending = null
@@ -436,9 +444,16 @@ export class Desktop {
     else if (this.escaped) this.drawEscaped()
     this.drawCursor()
     this.scanlines()
-    // зерно ЭЛТ поверх всего монитора: окна, обои, курсор — всё под ним
-    if (this.grain) {
-      ctx.fillStyle = this.grain
+    // зерно ЭЛТ поверх всего монитора: окна, обои, курсор — всё под ним.
+    // Паттерн пересобирается ~9 раз в секунду — картинка рябит, как настоящий ЭЛТ
+    if (this.grain && this.grainCanvas) {
+      if (performance.now() - this.grainDrawAt > 110) {
+        this.grainDrawAt = performance.now()
+        this.refillGrain()
+        this.grain = ctx.createPattern(this.grainCanvas, 'repeat') ?? this.grain
+      }
+      const pat: CanvasPattern = this.grain
+      ctx.fillStyle = pat
       ctx.fillRect(0, 0, DESKTOP_W, DESKTOP_H - TASKBAR)
     }
   }
@@ -537,12 +552,29 @@ export class Desktop {
     ctx.fillRect(0, 0, DESKTOP_W, DESKTOP_H)
   }
 
+  private grainCanvas: HTMLCanvasElement | null = null
+  private grainCtx: CanvasRenderingContext2D | null = null
+  /** Тик заставляет стол перерисовываться ради зерна (~9 раз в секунду). */
+  private grainAt = 0
+  /** Момент последней пересборки паттерна зерна в draw(). */
+  private grainDrawAt = 0
+
   private makeGrain(ctx: CanvasRenderingContext2D): CanvasPattern | null {
     const n = document.createElement('canvas')
     n.width = 64
     n.height = 64
     const c = n.getContext('2d')
     if (!c) return null
+    this.grainCanvas = n
+    this.grainCtx = c
+    this.refillGrain()
+    return ctx.createPattern(n, 'repeat')
+  }
+
+  /** Заново заполнить канву зерна случайными пикселями. */
+  private refillGrain(): void {
+    const c = this.grainCtx
+    if (!c) return
     const img = c.createImageData(64, 64)
     for (let i = 0; i < img.data.length; i += 4) {
       const v = Math.random() * 255
@@ -552,7 +584,6 @@ export class Desktop {
       img.data[i + 3] = 40
     }
     c.putImageData(img, 0, 0)
-    return ctx.createPattern(n, 'repeat')
   }
 
   // ── окна ─────────────────────────────────────────────────────────

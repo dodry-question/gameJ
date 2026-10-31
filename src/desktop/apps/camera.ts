@@ -37,6 +37,9 @@ export class CameraFeed {
   private debugDoor = false
   private debugKitchen = false
   private noise: HTMLCanvasElement
+  private noiseCtx: CanvasRenderingContext2D | null = null
+  /** Момент последней пересборки шума ленты. */
+  private noiseAt = 0
   /** Какой канал смотрим: 04 — комната 4, 05 — кухня. */
   private channel: '04' | '05' | '01' = '04'
   /** Режим скана (TAB): рамки и подписи на объектах кухни. */
@@ -126,19 +129,24 @@ export class CameraFeed {
     const c = document.createElement('canvas')
     c.width = 128
     c.height = 128
-    const ctx = c.getContext('2d')
-    if (ctx) {
-      const img = ctx.createImageData(128, 128)
-      for (let i = 0; i < img.data.length; i += 4) {
-        const v = 120 + Math.random() * 135
-        img.data[i] = v
-        img.data[i + 1] = v
-        img.data[i + 2] = v
-        img.data[i + 3] = 26
-      }
-      ctx.putImageData(img, 0, 0)
-    }
+    this.noiseCtx = c.getContext('2d')
+    this.refillNoise()
     return c
+  }
+
+  /** Шум ленты живой: канва пересобирается ~9 раз в секунду (см. draw). */
+  private refillNoise(): void {
+    const ctx = this.noiseCtx
+    if (!ctx) return
+    const img = ctx.createImageData(128, 128)
+    for (let i = 0; i < img.data.length; i += 4) {
+      const v = 120 + Math.random() * 135
+      img.data[i] = v
+      img.data[i + 1] = v
+      img.data[i + 2] = v
+      img.data[i + 3] = 26
+    }
+    ctx.putImageData(img, 0, 0)
   }
 
   /**
@@ -213,6 +221,12 @@ export class CameraFeed {
   draw(ctx: CanvasRenderingContext2D, r: Rect): void {
     this.hits = []
     fill(ctx, r, '#1b1d1f')
+    // шум ленты перерисовывается вместе с кадром: замершая плёнка выглядит
+    // мёртвой, живой ЭЛТ обязан рябить
+    if (performance.now() - this.noiseAt > 110) {
+      this.noiseAt = performance.now()
+      this.refillNoise()
+    }
 
     const cctv = this.cctv ?? (this.cctv = getCctv())
     const ready = this.ready
