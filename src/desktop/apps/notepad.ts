@@ -34,6 +34,8 @@ export class Notepad implements App {
   private areaRect: Rect | null = null
   private charW = 8
   private status = ''
+  /** Громкое подтверждение буфера: инвертированная строка состояния. */
+  private flash: { text: string; kind: 'ok' | 'err'; until: number } | null = null
 
   constructor(fileName = '', text = '') {
     this.text = text
@@ -160,30 +162,30 @@ export class Notepad implements App {
 
   private copy(): boolean {
     if (!this.hasSelection) {
-      this.status = 'нечего копировать'
+      this.flash = { text: 'НЕЧЕГО КОПИРОВАТЬ — ВЫДЕЛИ ТЕКСТ', kind: 'err', until: performance.now() + 1800 }
       return false
     }
     const value = this.text.slice(this.selStart, this.selEnd)
     if (!writeClipboard(value)) {
-      this.status = 'браузер не дал доступ к буферу'
+      this.flash = { text: 'БРАУЗЕР НЕ ДАЛ ДОСТУП К БУФЕРУ', kind: 'err', until: performance.now() + 2200 }
       return false
     }
-    this.status = `скопировано: ${value.length} симв.`
+    this.flash = { text: `СКОПИРОВАНО В БУФЕР · ${value.length} СИМВ.`, kind: 'ok', until: performance.now() + 1600 }
     return true
   }
 
   private cut(): boolean {
     if (!this.hasSelection) {
-      this.status = 'нечего вырезать'
+      this.flash = { text: 'НЕЧЕГО ВЫРЕЗАТЬ — ВЫДЕЛИ ТЕКСТ', kind: 'err', until: performance.now() + 1800 }
       return false
     }
     const n = this.selEnd - this.selStart
     if (!writeClipboard(this.text.slice(this.selStart, this.selEnd))) {
-      this.status = 'браузер не дал доступ к буферу'
+      this.flash = { text: 'БРАУЗЕР НЕ ДАЛ ДОСТУП К БУФЕРУ', kind: 'err', until: performance.now() + 2200 }
       return false
     }
     this.replaceSelection('')
-    this.status = `вырезано: ${n} симв.`
+    this.flash = { text: `ВЫРЕЗАНО В БУФЕР · ${n} СИМВ.`, kind: 'ok', until: performance.now() + 1600 }
     return true
   }
 
@@ -292,7 +294,7 @@ export class Notepad implements App {
   paste(value: string): boolean {
     if (!value) return false
     this.insert(value)
-    this.status = 'вставлено из буфера'
+    this.flash = { text: 'ВСТАВЛЕНО ИЗ БУФЕРА', kind: 'ok', until: performance.now() + 1600 }
     return true
   }
 
@@ -450,7 +452,27 @@ export class Notepad implements App {
     panel(ctx, { x: track.x + 1, y, w: track.w - 2, h }, true, 1)
   }
 
+  /** Пока горит подтверждение — перерисовываем, потом снимаем. */
+  tick(): boolean {
+    if (this.flash && performance.now() >= this.flash.until) {
+      this.flash = null
+      return true
+    }
+    return this.flash !== null
+  }
+
   private statusBar(ctx: CanvasRenderingContext2D, r: Rect): void {
+    // подтверждение буфера видно всегда: инверсия перекрывает «выделено N симв.»
+    if (this.flash && performance.now() < this.flash.until) {
+      fill(ctx, r, this.flash.kind === 'ok' ? C.select : '#7a1414')
+      text(ctx, this.flash.text, r.x + r.w / 2, r.y + r.h / 2, {
+        size: 10,
+        bold: true,
+        color: '#ffffff',
+        align: 'center',
+      })
+      return
+    }
     fill(ctx, r, C.face)
     bevel(ctx, r, false, 1)
     const { line, col } = this.lineCol(this.caret)
