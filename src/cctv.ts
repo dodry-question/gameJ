@@ -102,6 +102,19 @@ const clamp = (v: number, a: number, b: number): number => Math.min(b, Math.max(
 /** Плавное начало и конец: без рывка на старте и без «щелчка» в конце. */
 const smooth = (v: number): number => v * v * (3 - 2 * v)
 
+/**
+ * Дорожка позиции бёдер у клипов Mixamo записана в сантиметрах их стандартного
+ * скелета (~100), а наши модели выше (~260–280 единиц) — миксер каждым кадром
+ * сажает персонажа в пол. Оставляем только повороты: покачивание бёдер при
+ * шаге возвращаем процедурой от фазы.
+ */
+function stripHipsTrack(clip: THREE.AnimationClip): void {
+  clip.tracks = clip.tracks.filter(
+    (t) => !(t.name.endsWith('.position') && /Hips/i.test(t.name)),
+  )
+  clip.resetDuration()
+}
+
 export class Cctv {
   readonly canvas: HTMLCanvasElement
   /** Она вышла через дверь кухни: конец демо. */
@@ -271,7 +284,9 @@ export class Cctv {
     this.renderer.setSize(W, H, false)
     this.renderer.setClearColor(0x05070a, 1)
 
-    this.scene.fog = new THREE.Fog(0x05070a, 4, 11)
+    // дальняя граница тумана за конец коридора: иначе проём в кухню не виден
+    // с КАМ-04 и она «заходит в стену»
+    this.scene.fog = new THREE.Fog(0x05070a, 4, 14)
 
     this.applyCam()
 
@@ -341,6 +356,7 @@ export class Cctv {
         new FBXLoader().load(url, (cf) => {
           const clip = cf.animations[0]
           if (!clip || !this.maniacMixer) return
+          stripHipsTrack(clip)
           const action = this.maniacMixer.clipAction(clip)
           if (key === 'stab') {
             action.loop = THREE.LoopOnce
@@ -364,6 +380,7 @@ export class Cctv {
       new FBXLoader().load(url, (fbx) => {
         const clip = fbx.animations[0]
         if (!clip || !this.mixer) return
+        stripHipsTrack(clip)
         this.actions.set(key, this.mixer.clipAction(clip))
       })
     }
@@ -1042,6 +1059,14 @@ export class Cctv {
         action.timeScale = clamp(this.speed / nominal, 0.5, 1.9)
       }
       this.mixer.update(dt)
+      // подпрыг корпуса возвращён процедурой: у клипа позиционный трек бёдер
+      // вырезан, а фаза шага по-прежнему набегает от пройденного пути
+      if (moving) {
+        g.position.y +=
+          Math.abs(Math.cos(this.phase * (clip === 'run' ? 1.35 : 1))) *
+          (clip === 'run' ? 0.05 : 0.028) *
+          this.moveBlend
+      }
     }
 
     // ── процедурные слои поверх мокапа: только дельты ─────────────────
@@ -1674,6 +1699,9 @@ export class Cctv {
       if (a) a.timeScale = 0.45
       this.playManiacClip(t >= WALK_S - 0.9 ? 'stab' : 'walk', 0.12)
       this.maniacMixer.update(dt)
+      // тяжёлое притопывание в такт замедленному шагу (позиционный трек клипа
+      // вырезан — иначе он сажает его скелет в пол)
+      m.position.y = Math.abs(Math.cos(t * Math.PI * 2 * 0.72)) * 0.035
     } else {
       m.rotation.x = 0.09 + Math.sin(t * 5.6) * 0.05
       m.position.y = Math.abs(Math.sin(t * 5.6)) * 0.035
