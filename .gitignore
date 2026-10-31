@@ -25,4 +25,7 @@ dist-ssr
 
 # ZCode Sites stage (не коммитится)
 .zcode-site
+
+# Привязка к ZCode Sites (аккаунтная — не для репы)
+.zcode-site.json
 .mixamo-profile/

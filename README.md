@@ -103,6 +103,8 @@ tools/check-mocap.mjs, check-run.mjs, check-maniac.mjs, check-gesture.mjs,
 - `?ui&door` — замок считается снятым сразу, дверь открыта.
 - `?ui&pairs` — перескок в конец: она уже на кухне, Netscape открыт на
   pairs.local — слей мини-игру и смотри кино провала.
+- `node tools/probe-live.mjs` — проверка прод-сайта (ZCode Sites): камера
+  грузится и ?pairs открывает мини-игру.
 - `node tools/shot.mjs` — открывает игру в установленном Edge, кликает по иконкам,
   таскает окна и кладёт скриншоты в `%TEMP%\opencode`. Нужен запущенный dev-сервер
   на `127.0.0.1:5174` (или передай свой URL первым аргументом).
