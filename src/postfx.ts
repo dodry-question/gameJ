@@ -55,7 +55,7 @@ export function makeFinalPass(): ShaderPass {
         // на GPU, и через минуты игры рябь вырождается в статичную картинку
         float tt = mod(uTime, 100.0);
         float g = hash(floor(uv * uRes / 2.5) + floor(tt * 12.0) * 91.7);
-        col += (g - 0.5) * 0.02;
+        col += (g - 0.5) * 0.015;
         col *= 0.99 + 0.01 * sin(tt * 41.0) * sin(tt * 2.7);
 
         gl_FragColor = vec4(col, 1.0);

@@ -581,7 +581,7 @@ export class Desktop {
       img.data[i] = v
       img.data[i + 1] = v
       img.data[i + 2] = v
-      img.data[i + 3] = 40
+      img.data[i + 3] = 34
     }
     c.putImageData(img, 0, 0)
   }
