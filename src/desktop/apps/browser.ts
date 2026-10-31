@@ -131,6 +131,13 @@ export class Browser implements App {
     ;(window as unknown as { __browser?: Browser }).__browser = this
   }
 
+  /** Отладка ?pairs: открыть страницу напрямую, без набора адреса и гейтов. */
+  debugOpenPage(page: Page): void {
+    this.page = page
+    if (page in URLS) this.editValue = URLS[page as keyof typeof URLS]
+    this.loading = 0.6
+  }
+
   draw(ctx: CanvasRenderingContext2D, r: Rect): void {
     this.hits = []
     this.fields = []

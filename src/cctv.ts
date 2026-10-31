@@ -28,6 +28,15 @@ export const H = 240
 /** Кино провала: сколько секунд маньяк идёт от проёма до девушки. */
 export const WALK_S = 6.5
 
+/** Скелет и поза покоя одного персонажа: общий механизм для неё и маньяка. */
+type Rig = {
+  root: THREE.Object3D
+  bones: Map<string, THREE.Bone>
+  rest: Map<string, THREE.Quaternion>
+  chains: Map<string, THREE.Object3D[]>
+  depth: Map<string, number>
+}
+
 /**
  * Поза: имя кости → углы поворота от позы покоя в осях комнаты:
  * X — наклон вперёд(+)/назад(-), Y — поворот влево(+)/вправо(-),
@@ -113,6 +122,11 @@ export class Cctv {
   private depth = new Map<string, number>()
   /** Цепочки предков без самого корня модели — чтобы не собирать их каждый кадр. */
   private chains = new Map<string, THREE.Object3D[]>()
+  /** Скелет маньяка: та же механика поз, отдельные карты. */
+  private maniacBones = new Map<string, THREE.Bone>()
+  private maniacRest = new Map<string, THREE.Quaternion>()
+  private maniacDepth = new Map<string, number>()
+  private maniacChains = new Map<string, THREE.Object3D[]>()
   private doorPivot: THREE.Group
   private gapGlow: THREE.Mesh
   private gapLight: THREE.PointLight
@@ -284,6 +298,22 @@ export class Cctv {
       while (this.kitchen.maniac.children.length > 0) {
         this.kitchen.maniac.remove(this.kitchen.maniac.children[0])
       }
+      // скелет FBX — в карты рига: шаг будет качать настоящие кости
+      fbx.traverse((o) => {
+        if (!(o as THREE.Bone).isBone) return
+        const bone = o as THREE.Bone
+        const name = bone.name.replace(/^mixamorig:?/, '')
+        this.maniacBones.set(name, bone)
+        this.maniacRest.set(name, bone.quaternion.clone())
+        const chain: THREE.Object3D[] = []
+        let p: THREE.Object3D | null = bone
+        while (p && p !== fbx) {
+          chain.push(p)
+          p = p.parent
+        }
+        this.maniacChains.set(name, chain)
+        this.maniacDepth.set(name, chain.length)
+      })
       this.kitchen.maniac.add(fbx)
     })
   }
@@ -447,33 +477,51 @@ export class Cctv {
     }
   }
 
-  /**
-   * Мировой поворот родителя кости с учётом уже применённой позы предков.
-   * Результат — во временном tmpA, который сразу потребляется в pose().
-   */
-  private parentWorld(name: string): THREE.Quaternion {
-    const chain = this.chains.get(name)
-    const q = this.tmpA.copy(this.girl!.quaternion)
+  /** Применить позу от корня к листьям: родители должны быть повёрнуты первыми. */
+  private applyPose(p: Pose): void {
+    this.applyPoseOn(this.girlRig, p)
+  }
+
+  private get girlRig(): Rig {
+    return {
+      root: this.girl!,
+      bones: this.bones,
+      rest: this.rest,
+      chains: this.chains,
+      depth: this.depth,
+    }
+  }
+
+  /** Риг маньяка: null, пока FBX не догрузился. */
+  private get maniacRig(): Rig | null {
+    if (this.maniacBones.size === 0) return null
+    return {
+      root: this.kitchen.maniac,
+      bones: this.maniacBones,
+      rest: this.maniacRest,
+      chains: this.maniacChains,
+      depth: this.maniacDepth,
+    }
+  }
+
+  private parentWorldOn(rig: Rig, name: string): THREE.Quaternion {
+    const chain = rig.chains.get(name)
+    const q = this.tmpA.copy(rig.root.quaternion)
     if (!chain) return q
     for (let i = chain.length - 1; i >= 1; i--) q.multiply(chain[i].quaternion)
     return q
   }
 
-  /**
-   * Повернуть кость на углы (X — наклон, Y — поворот, Z — крен) в осях
-   * комнаты относительно позы покоя. Углы прибавляются к текущей позе родителя,
-   * поэтому одна и та же запись работает и сидя, и в беге, и в рывке.
-   */
-  private pose(name: string, x = 0, y = 0, z = 0): void {
-    const bone = this.bones.get(name)
-    const rest = this.rest.get(name)
+  private poseOn(rig: Rig, name: string, x = 0, y = 0, z = 0): void {
+    const bone = rig.bones.get(name)
+    const rest = rig.rest.get(name)
     if (!bone || !rest) return
-    const parent = this.parentWorld(name)
+    const parent = this.parentWorldOn(rig, name)
     this.euler.set(x, y, z, 'XYZ')
     this.delta.setFromEuler(this.euler)
     // дельта задана в осях комнаты, а кость живёт в мировых — переносим
-    this.tmpB.copy(this.girl!.quaternion).invert()
-    this.deltaWorld.copy(this.girl!.quaternion).multiply(this.delta).multiply(this.tmpB)
+    this.tmpB.copy(rig.root.quaternion).invert()
+    this.deltaWorld.copy(rig.root.quaternion).multiply(this.delta).multiply(this.tmpB)
     bone.quaternion
       .copy(parent)
       .invert()
@@ -482,12 +530,11 @@ export class Cctv {
       .multiply(rest)
   }
 
-  /** Применить позу от корня к листьям: родители должны быть повёрнуты первыми. */
-  private applyPose(p: Pose): void {
-    const names = Object.keys(p).sort((a, b) => (this.depth.get(a) ?? 0) - (this.depth.get(b) ?? 0))
+  private applyPoseOn(rig: Rig, p: Pose): void {
+    const names = Object.keys(p).sort((a, b) => (rig.depth.get(a) ?? 0) - (rig.depth.get(b) ?? 0))
     for (const name of names) {
       const a = p[name]
-      this.pose(name, a[0], a[1], a[2])
+      this.poseOn(rig, name, a[0], a[1], a[2])
     }
   }
 
@@ -1278,6 +1325,32 @@ export class Cctv {
     return out
   }
 
+  /** Имена костей маньяка из FBX — чтобы анимировать его скелет. */
+  debugManiacBoneNames(): string[] {
+    const names: string[] = []
+    this.kitchen?.maniac.traverse((o) => {
+      if ((o as THREE.Bone).isBone) names.push(o.name)
+    })
+    return names
+  }
+
+  /** Мировые X-повороты ног маньяка — проверка шага инструментами. */
+  debugManiacPose(): Record<string, number> | null {
+    const rig = this.maniacRig
+    if (!rig) return null
+    const out: Record<string, number> = {}
+    const q = new THREE.Quaternion()
+    const e = new THREE.Euler()
+    for (const name of ['LeftUpLeg', 'RightUpLeg', 'LeftLeg', 'RightLeg']) {
+      const b = rig.bones.get(name)
+      if (!b) continue
+      b.getWorldQuaternion(q)
+      e.setFromQuaternion(q, 'YXZ')
+      out[name] = +e.x.toFixed(2)
+    }
+    return out
+  }
+
   maniacAttack(): void {
     if (this.attackT >= 0 || this.state === 'tied') return
     // нападение возможно только на кухне: если она ещё в пути — откладываем
@@ -1479,15 +1552,34 @@ export class Cctv {
     // тяжёлая походка: корпус качается и притопывает
     m.rotation.x = 0.09 + Math.sin(t * 5.6) * 0.05
     m.position.y = Math.abs(Math.sin(t * 5.6)) * 0.035
-    // настоящий шаг: ноги от бедра, руки в противофазе, нож ходит с рукой
-    const p = this.kitchen.maniacParts
+    // настоящий шаг на скелете FBX: ноги от бедра, колени в переносе,
+    // руки в противофазе (в правой нож), корпус слегка скручивается.
+    // Пока FBX не догрузился, шевелим примитивную болванку как запасную.
+    const parts = this.kitchen.maniacParts
     const cad = t * Math.PI * 2 * 1.5 // полтора шага в секунду
-    p.legL.rotation.x = Math.sin(cad) * 0.5
-    p.legR.rotation.x = Math.sin(cad + Math.PI) * 0.5
-    p.armL.rotation.x = Math.sin(cad + Math.PI) * 0.3
-    p.armR.rotation.x = Math.sin(cad) * 0.22
-    p.torso.rotation.y = Math.sin(cad) * 0.06
-    p.head.rotation.x = Math.sin(cad * 2) * 0.04
+    const sL = Math.sin(cad)
+    const sR = Math.sin(cad + Math.PI)
+    parts.legL.rotation.x = sL * 0.5
+    parts.legR.rotation.x = sR * 0.5
+    parts.armL.rotation.x = sR * 0.3
+    parts.armR.rotation.x = sL * 0.22
+    parts.torso.rotation.y = sL * 0.06
+    parts.head.rotation.x = Math.sin(cad * 2) * 0.04
+    const rig = this.maniacRig
+    if (rig) {
+      const mp: Pose = {}
+      this.add(mp, 'LeftUpLeg', -sL * 0.5, 0, 0)
+      this.add(mp, 'RightUpLeg', -sR * 0.5, 0, 0)
+      this.add(mp, 'LeftLeg', Math.max(0, -sL) * 0.55, 0, 0)
+      this.add(mp, 'RightLeg', Math.max(0, -sR) * 0.55, 0, 0)
+      this.add(mp, 'LeftArm', sR * 0.35, 0, 0.1)
+      this.add(mp, 'RightArm', sL * 0.3, 0, -0.1)
+      this.add(mp, 'LeftForeArm', -0.2, 0, 0)
+      this.add(mp, 'RightForeArm', -0.4, 0, 0) // в правой руке нож
+      this.add(mp, 'Spine', 0.07, sL * 0.05, 0)
+      this.add(mp, 'Head', Math.sin(cad * 2) * 0.03, 0, 0)
+      this.applyPoseOn(rig, mp)
+    }
 
     const dx = tx - m.position.x
     const dz = tz - m.position.z

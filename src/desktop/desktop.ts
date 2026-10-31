@@ -210,6 +210,10 @@ export class Desktop {
   private cineAt = 0
   private offPlayed = false
   private breathStarted = false
+  /** Отладка ?pairs уже отработала: перескок на мини-игру выполняется один раз. */
+  private debugPairsDone = false
+  /** Страница для открываемого браузера: применится в makeApp после «загрузки». */
+  private pendingBrowserPage: 'pairs' | null = null
 
   private drag: { win: Win; ox: number; oy: number } | null = null
   /** Протяжка внутри окна: выделение текста в блокноте. */
@@ -263,6 +267,13 @@ export class Desktop {
 
   tick(): void {
     const now = performance.now()
+
+    // Отладка ?pairs: перескок в конец — она на кухне, Netscape открыт
+    // на pairs.local. Слей мини-игру и смотри кино провала.
+    if (!this.debugPairsDone && location.search.includes('pairs') && getCctv().loaded) {
+      this.debugPairsDone = true
+      this.debugOpenPairs()
+    }
 
     if (this.pending && now >= this.pending.end) {
       const key = this.pending.key
@@ -512,6 +523,11 @@ export class Desktop {
       // игровые узлы открываются только «по сюжету»: иначе софт-лок
       browser.canOpenLock = () => this.cameraAccess
       browser.canOpenPairs = () => getCctv().kitchenReady
+      // ?pairs: страница задаётся до открытия окна — оно ещё «грузится»
+      if (this.pendingBrowserPage) {
+        browser.debugOpenPage(this.pendingBrowserPage)
+        this.pendingBrowserPage = null
+      }
       return browser
     }
     if (key === 'mail') return this.getMail()
@@ -1372,9 +1388,24 @@ export class Desktop {
     this.dirty = true
   }
 
+  /** Отладка ?pairs: перескок прямо ко второй мини-игре. */
+  private debugOpenPairs(): void {
+    getCctv().debugToKitchen()
+    this.cameraAccess = true
+    // окно «грузится с диска» — страницу применит makeApp при спавне
+    this.pendingBrowserPage = 'pairs'
+    this.open('browser')
+    this.dirty = true
+  }
+
   /** Кино провала: зритель смотрит камеру 05, окно терминала залочено. */
   private throwToCamera(): void {
-    const tds = this.cache.get('tds')
+    let tds = this.cache.get('tds')
+    if (!(tds instanceof Tds)) {
+      // терминал ещё не ставился — открываем отладкой, гейты уже не важны
+      this.debugOpenCamera()
+      tds = this.cache.get('tds')
+    }
     if (tds instanceof Tds) {
       tds.forceChannel('05')
       const win = this.windows.find((w) => w.app === tds)
@@ -1382,9 +1413,6 @@ export class Desktop {
         win.min = false
         this.raise(win)
       } else this.open('tds')
-    } else {
-      // терминал ещё не ставился — открываем отладкой, гейты уже не важны
-      this.debugOpenCamera()
     }
   }
 
