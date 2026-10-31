@@ -26,7 +26,10 @@ export function makeFinalPass(): ShaderPass {
       varying vec2 vUv;
 
       float hash(vec2 p) {
-        return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
+        // хэш без sin: sin-хэш на GPU даёт полосатую структуру зерна
+        vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+        p3 += dot(p3, p3.yzx + 33.33);
+        return fract((p3.x + p3.y) * p3.z);
       }
 
       void main() {
@@ -52,7 +55,7 @@ export function makeFinalPass(): ShaderPass {
         // на GPU, и через минуты игры рябь вырождается в статичную картинку
         float tt = mod(uTime, 100.0);
         float g = hash(floor(uv * uRes / 2.5) + floor(tt * 12.0) * 91.7);
-        col += (g - 0.5) * 0.028;
+        col += (g - 0.5) * 0.02;
         col *= 0.99 + 0.01 * sin(tt * 41.0) * sin(tt * 2.7);
 
         gl_FragColor = vec4(col, 1.0);
