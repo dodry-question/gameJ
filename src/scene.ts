@@ -32,9 +32,10 @@ export class Room {
   private target = new THREE.Vector3(0, 0.195, 0.07)
   private look = new THREE.Vector2()
   private clock = 0
-  /** Фаза концовки: удар — штора темноты сверху вниз, голова падает на клавиатуру. */
+  /** Фаза концовки: удар — взгляд вверх-вправо, падение, штора + глобальный фейд. */
   private ending: 'none' | 'hit' | 'black' = 'none'
   private endingAt = 0
+  private blackAt = 0
   private endOverlay: HTMLDivElement | null = null
   private endCurtain: HTMLCanvasElement | null = null
   private endText: HTMLDivElement | null = null
@@ -378,7 +379,9 @@ export class Room {
    */
   setEnding(phase: 'hit' | 'black'): void {
     this.ending = phase
-    this.endingAt = this.clock
+    // таймер удара не сбрасываем: штора и падение головы — одна линия времени
+    if (phase === 'hit') this.endingAt = this.clock
+    if (phase === 'black') this.blackAt = this.clock
     if (!this.endOverlay) {
       const ov = document.createElement('div')
       // темноту рисует канва шторы: див прозрачный
@@ -406,21 +409,36 @@ export class Room {
 
     // параллакс: еле заметный, чтобы экран не качался как лодка
     const k = 1 - Math.pow(0.06, dt)
-    // концовка: удар — голова падает вперёд и вниз, на клавиатуру, и застывает
+    // концовка, одна линия времени: взгляд в правый верхний угол → падение
+    // лицом в клавиатуру; две анимации темноты — быстрая штора и медленный
+    // глобальный фейд поверх
+    let headYaw = 0
     let headPitch = 0
     if (this.ending === 'hit') {
       const e = this.clock - this.endingAt
-      const p = Math.min(1, e / 0.55)
-      headPitch = (p * p * (3 - 2 * p)) * 0.5 // вниз, на клавиатуру
+      if (e < 0.35) {
+        // бьёт — взгляд дёргается в правый верхний угол
+        const p = Math.min(1, e / 0.35)
+        headYaw = -(p * p * (3 - 2 * p)) * 0.24
+        headPitch = (p * p * (3 - 2 * p)) * 0.26
+      } else if (e < 0.85) {
+        // голова падает вперёд, лицом в клавиатуру
+        const p = Math.min(1, (e - 0.35) / 0.5)
+        const s = p * p * (3 - 2 * p)
+        headYaw = -0.24 * (1 - s)
+        headPitch = 0.26 - s * 0.88 // вниз до -0.62
+      } else {
+        headPitch = -0.62 // обмякла: лежит лицом в клавиатуру
+      }
     } else if (this.ending === 'black') {
-      headPitch = 0.5 // обмякла: лежит лицом в клавиатуру
+      headPitch = -0.62
     }
     this.camera.position.x += (this.eye.x + this.look.x * 0.0045 - this.camera.position.x) * k
     this.camera.position.y +=
       (this.eye.y + this.look.y * 0.003 + Math.sin(t * 0.55) * 0.0004 - this.camera.position.y) * k
     if (this.ending !== 'none') {
       const len = 0.36
-      const yaw = Math.PI
+      const yaw = Math.PI + headYaw
       const pitch = -0.17 + headPitch
       this.tmpTarget.set(
         this.camera.position.x + Math.sin(yaw) * Math.cos(pitch) * len,
@@ -456,16 +474,22 @@ export class Room {
 
     this.pass.uniforms.uTime.value = t
 
-    // концовка: чёрная штора резко опускается сверху вниз, текст — в тьме
-    if (this.endOverlay && this.ending !== 'none') this.drawCurtain()
+    // концовка: две анимации темноты — быстрая штора сверху вниз (внимание
+    // на ней) и медленный глобальный фейд поверх всего экрана
+    if (this.endOverlay && this.ending !== 'none') this.drawDarkness()
     if (this.endText) {
-      const e = this.clock - this.endingAt
+      const e = this.clock - this.blackAt
       this.endText.style.opacity = this.ending === 'black' && e > 0.5 ? '1' : '0'
     }
   }
 
-  /** Штора темноты: резко опускается сверху вниз и накрывает экран целиком. */
-  private drawCurtain(): void {
+  /**
+   * Темнота в два слоя. Первый — штора: резко опускается сверху вниз за
+   * 0.45 с, пока падает голова. Второй — глобальный фейд на весь экран,
+   * медленный (0.5 → 2.5 с): внимание держится на первой анимации, а вторая
+   * дожимает кадр в абсолютную черноту.
+   */
+  private drawDarkness(): void {
     const cv = this.endCurtain
     if (!cv) return
     const w = window.innerWidth
@@ -478,17 +502,27 @@ export class Room {
     if (!c) return
     const e = this.clock - this.endingAt
     c.clearRect(0, 0, w, h)
-    const p = Math.min(1, e / 0.45)
-    const drop = p * p * (3 - 2 * p) * h
-    c.fillStyle = '#000'
-    c.fillRect(0, 0, w, drop)
-    if (drop < h) {
-      // нижняя кромка шторы: чуть мягче, но всё равно резко
-      const lip = c.createLinearGradient(0, drop, 0, drop + 14)
-      lip.addColorStop(0, 'rgba(0, 0, 0, 0.9)')
-      lip.addColorStop(1, 'rgba(0, 0, 0, 0)')
-      c.fillStyle = lip
-      c.fillRect(0, drop, w, 14)
+
+    // второй слой: глобальный медленный фейд (под шторой, поверх кадра)
+    const fade = Math.min(1, Math.max(0, (e - 0.5) / 2))
+    if (fade > 0) {
+      c.fillStyle = `rgba(0, 0, 0, ${(fade * 0.9).toFixed(3)})`
+      c.fillRect(0, 0, w, h)
+    }
+
+    // первый слой: штора сверху вниз, синхронна с падением головы
+    const p = Math.min(1, Math.max(0, (e - 0.4) / 0.45))
+    const drop = (p * p * (3 - 2 * p)) * h
+    if (drop > 0) {
+      c.fillStyle = '#000'
+      c.fillRect(0, 0, w, drop)
+      if (drop < h) {
+        const lip = c.createLinearGradient(0, drop, 0, drop + 12)
+        lip.addColorStop(0, 'rgba(0, 0, 0, 0.9)')
+        lip.addColorStop(1, 'rgba(0, 0, 0, 0)')
+        c.fillStyle = lip
+        c.fillRect(0, drop, w, 12)
+      }
     }
   }
 

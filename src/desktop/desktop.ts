@@ -1707,7 +1707,8 @@ export class Desktop {
       if (t >= 4.4) this.endNext('hit')
     } else if (this.endingPhase === 'hit') {
       // сознание теряется мгновенно: через секунду с четвертью — чернота
-      if (t >= 1.3) this.endNext('black')
+      // глобальный фейд завершён (2.5 с) — чернота и текст
+      if (t >= 2.5) this.endNext("black")
     } else if (this.endingPhase === 'black') {
       // текст проявился: клик перезапускает смену
       if (t >= 2.4 && !this.girlDead) {
