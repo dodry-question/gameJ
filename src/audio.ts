@@ -101,6 +101,7 @@ export class Sound {
       void this.grabVoice('sounds/voice/cry.ogg').then((b) => (this.girlCryBuf = b))
       void this.grabVoice('sounds/scream.ogg').then((b) => (this.endScreamBuf = b))
       void this.grabVoice('sounds/tututu.ogg').then((b) => (this.tututuBuf = b))
+      void this.grabVoice('sounds/girl-scream.mp3').then((b) => (this.girlFinalBuf = b))
     } catch {
       this.ctx = null
       this.master = null
@@ -870,6 +871,7 @@ export class Sound {
   private girlCryBuf: AudioBuffer | null = null
   private endScreamBuf: AudioBuffer | null = null
   private tututuBuf: AudioBuffer | null = null
+  private girlFinalBuf: AudioBuffer | null = null
   private tututuSrc: AudioBufferSourceNode | null = null
   private gaspSrc: AudioBufferSourceNode | null = null
   private gaspGain: GainNode | null = null
@@ -976,6 +978,29 @@ export class Sound {
     creak.connect(cf).connect(cg).connect(panner)
     creak.start(ct)
     creak.stop(ct + 0.3)
+  }
+
+  /**
+   * Она вскрикивает перед затемнением: женский крик (Wikimedia Commons,
+   * Nick121087 «Demonic Woman Scream», CC0), короткий срез — экран гаснет
+   * мгновенно и звук обрывается вместе с ним.
+   */
+  girlFinalScream(): void {
+    const ctx = this.ctx
+    const bus = this.cameraBus() ?? this.master
+    if (!ctx || !bus || !this.girlFinalBuf) return
+    const src = ctx.createBufferSource()
+    src.buffer = this.girlFinalBuf
+    src.playbackRate.value = 1.05
+    const g = ctx.createGain()
+    const t = ctx.currentTime
+    const dur = 0.5
+    g.gain.setValueAtTime(0.0001, t)
+    g.gain.linearRampToValueAtTime(0.75, t + 0.05)
+    g.gain.setValueAtTime(0.75, t + dur * 0.7)
+    g.gain.exponentialRampToValueAtTime(0.001, t + dur)
+    src.connect(g).connect(bus)
+    src.start(t, 0.35, dur + 0.05)
   }
 
   /**

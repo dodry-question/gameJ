@@ -249,6 +249,8 @@ export class Cctv {
   private lampPrev = true
   /** Провал случился, пока она ещё не дошла до кухни. */
   private maniacPending = false
+  /** Короткий крик перед затемнением уже прозвучал. */
+  private endScreamed = false
   private raycaster = new THREE.Raycaster()
   private euler = new THREE.Euler()
   private delta = new THREE.Quaternion()
@@ -1118,15 +1120,14 @@ export class Cctv {
       return
     }
 
-    // Нападение: пятится спиной вперёд (цикл шага реверс), потом застыла
-    // лицом к маньяку и дрожит. Спину не ломаем: наклоны минимальные.
+    // Нападение: медленно пятится спиной вперёд, потом застыла лицом к
+    // маньяку и дрожит. Никакой борьбы — просто отступает, пока может.
     if (this.attackT >= 0) {
       this.playClip(null, 0.12)
       const p: Pose = { ...STAND }
-      this.moveBlend += ((this.backpedal ? 1 : 0) - this.moveBlend) * Math.min(1, dt * 6)
       if (this.backpedal) {
-        this.walkPose(p, t) // фаза намотана назад — шагает задом наперёд
-        this.add(p, 'Spine', -0.06, 0, 0) // чуть отклоняется от него
+        this.walkPose(p, t) // фаза намотана назад — медленный шаг задом
+        this.add(p, 'Spine', -0.05, 0, 0)
       } else {
         this.add(p, 'Spine', -0.12, 0, 0)
         this.add(p, 'LeftArm', -0.45, 0, 0.55)
@@ -1650,8 +1651,19 @@ export class Cctv {
     this.attackT = 0
     this.attackPhase = { near: false, touch: false }
     this.backpedal = false
+    this.endScreamed = false
     this.kitchen.maniac.visible = true
     this.kitchen.maniac.position.set(0, 0, KITCHEN.z1 - 0.3)
+    // сразу разворачиваемся к нему: в кино никаких оборотов корпуса
+    const g = this.girl
+    if (g) {
+      this.yawTarget = Math.atan2(
+        this.kitchen.maniac.position.x - g.position.x,
+        this.kitchen.maniac.position.z - g.position.z,
+      )
+      this.yaw = this.yawTarget
+      g.rotation.y = this.yaw
+    }
   }
 
   private say(text: string, sec: number): void {
@@ -1881,35 +1893,33 @@ export class Cctv {
     // у обоих взгляд замирает заранее, иначе корпуса крутит волчком
     if (dist > 0.35) m.rotation.y = Math.atan2(dx, dz)
 
-    // она пятится спиной вперёд, пытаясь держать от него метр, пока есть
-    // куда (мебель и стены отрежут отход); в последней трети пути — застыла
+    // она медленно пятится от него, пока не упрётся в стену или мебель:
+    // никакой борьбы и никаких разворотов — просто отступает
     this.backpedal = false
-    const bx = g.position.x - m.position.x
-    const bz = g.position.z - m.position.z
-    const bd = Math.hypot(bx, bz) || 1
-    const keep = 0.9
-    if (t < WALK_S * 0.62 && bd < keep) {
-      const step = Math.min(0.55 * dt, keep - bd)
-      if (step > 0) {
-        const safe = this.avoidChair(g.position.x + (bx / bd) * step, g.position.z + (bz / bd) * step)
-        const moved = Math.hypot(safe.x - g.position.x, safe.z - g.position.z)
-        if (moved > 0.0005) {
-          this.backpedal = true
-          g.position.x = safe.x
-          g.position.z = safe.z
-          this.phase -= moved * 4.6 // цикл шага задом наперёд: ноги идут назад
-        }
+    if (t < WALK_S * 0.8) {
+      const bx = g.position.x - m.position.x
+      const bz = g.position.z - m.position.z
+      const bd = Math.hypot(bx, bz) || 1
+      const step = 0.42 * dt
+      const safe = this.avoidChair(g.position.x + (bx / bd) * step, g.position.z + (bz / bd) * step)
+      const moved = Math.hypot(safe.x - g.position.x, safe.z - g.position.z)
+      if (moved > 0.0005) {
+        this.backpedal = true
+        g.position.x = safe.x
+        g.position.z = safe.z
+        this.phase -= moved * 2.2 // цикл шага назад, медленно
       }
     }
     this.prev.set(g.position.x, 0, g.position.z)
 
-    // она смотрит на него, доворачивая плавно; в упор взгляд замирает
-    if (dist > 0.6) {
+    // смотрит на него: доворот только пока он далеко, вблизи взгляд заморожен —
+    // иначе корпус уводит в обороты вокруг него
+    if (dist > 1.4) {
       const target = Math.atan2(m.position.x - g.position.x, m.position.z - g.position.z)
       let d = (target - this.yaw) % (Math.PI * 2)
       if (d > Math.PI) d -= Math.PI * 2
       if (d < -Math.PI) d += Math.PI * 2
-      this.yaw += clamp(d, -1.6 * dt, 1.6 * dt)
+      this.yaw += clamp(d, -0.9 * dt, 0.9 * dt)
     }
     this.yawDelta = 0 // вторичное скручивание корпуса на время кино выключено
     g.rotation.y = this.yaw
@@ -1917,6 +1927,11 @@ export class Cctv {
     this.targetX = g.position.x
     this.targetZ = g.position.z
 
+    // короткий крик прямо перед темнотой: экран и звук гаснут мгновенно
+    if (!this.endScreamed && t >= WALK_S - 1.55) {
+      this.endScreamed = true
+      this.events.push('girlFinal')
+    }
     if (!this.attackPhase.near && t >= WALK_S - 1) {
       this.attackPhase.near = true
       this.onAttackPhase?.('near')

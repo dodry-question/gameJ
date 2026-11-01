@@ -202,6 +202,7 @@ export class CameraFeed {
         if (ev === 'doorDeny') this.sound.error()
         else if (ev === 'doorOk') this.sound.open()
         else if (ev === 'scream') this.sound.girlScream()
+        else if (ev === 'girlFinal') this.sound.girlFinalScream()
       }
     }
     // принтер: пока печатает — гудит (прогрев, потом шум)
