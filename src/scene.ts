@@ -41,6 +41,10 @@ export class Room {
   private endText: HTMLDivElement | null = null
   private host: HTMLElement
   private tmpTarget = new THREE.Vector3()
+  /** Последнее положение головы в мешке — застывает при потере сознания. */
+  private endSwayYaw = 0
+  private endSwayPitch = 0
+  private endSwayRoll = 0
 
   constructor(host: HTMLElement, desktop: HTMLCanvasElement) {
     this.host = host
@@ -408,29 +412,48 @@ export class Room {
 
     // параллакс: еле заметный, чтобы экран не качался как лодка
     const k = 1 - Math.pow(0.06, dt)
-    // концовка: голову оператора трясёт и дёргает — он пытается вырваться
-    let shake = 0
+    // концовка: голову водит из стороны в сторону, в самом конце она
+    // запрокидывается к потолку и застывает — сознание уходит
+    let swayYaw = 0
+    let swayPitch = 0
+    let swayRoll = 0
     if (this.ending === 'bag') {
-      const elapsed = this.clock - this.endingAt
-      // резкие рывки с затуханием: схватили, мотает изо всех сил
-      shake = 0.05 * Math.max(0, 1 - elapsed / 8) * (1 + Math.sin(elapsed * 13) * 0.4)
-      if (Math.random() < 0.06) shake *= 2.4
+      const e = this.clock - this.endingAt
+      swayYaw = Math.sin(e * 1.5) * 0.15 + Math.sin(e * 0.73) * 0.07
+      swayRoll = Math.sin(e * 1.05 + 1.2) * 0.055
+      swayPitch = Math.sin(e * 2.1 + 0.5) * 0.02
+      if (e > 3.9) {
+        const p = Math.min(1, (e - 3.9) / 1.5)
+        swayPitch += p * p * (3 - 2 * p) * 0.52 // валится затылком к потолку
+      }
+      this.endSwayYaw = swayYaw
+      this.endSwayPitch = swayPitch
+      this.endSwayRoll = swayRoll
+    } else if (this.ending === 'faint' || this.ending === 'black') {
+      // голова обмякла: застыла в последнем положении, запрокинута к потолку
+      swayYaw = this.endSwayYaw
+      swayPitch = Math.max(this.endSwayPitch, 0.52)
+      swayRoll = this.endSwayRoll
     }
-    this.camera.position.x +=
-      (this.eye.x + this.look.x * 0.0045 + (Math.random() - 0.5) * shake - this.camera.position.x) * k
+    this.camera.position.x += (this.eye.x + this.look.x * 0.0045 - this.camera.position.x) * k
     this.camera.position.y +=
-      (this.eye.y +
-        this.look.y * 0.003 +
-        Math.sin(t * 0.55) * 0.0004 +
-        (Math.random() - 0.5) * shake -
-        this.camera.position.y) *
-      k
-    const target = this.ending === 'none' ? this.target : this.tmpTarget.copy(this.target)
-    if (shake > 0) {
-      target.x += (Math.random() - 0.5) * shake * 2.2
-      target.y += (Math.random() - 0.5) * shake * 2.2
+      (this.eye.y + this.look.y * 0.003 + Math.sin(t * 0.55) * 0.0004 - this.camera.position.y) * k
+    if (this.ending !== 'none') {
+      // взгляд собирается из углов: база — в монитор, поверх — покачивание
+      const len = 0.36
+      const yaw = Math.PI + swayYaw
+      const pitch = -0.17 + swayPitch
+      this.tmpTarget.set(
+        this.camera.position.x + Math.sin(yaw) * Math.cos(pitch) * len,
+        this.camera.position.y + Math.sin(pitch) * len,
+        this.camera.position.z + Math.cos(yaw) * Math.cos(pitch) * len,
+      )
+      this.camera.rotation.z = swayRoll
+      this.camera.lookAt(this.tmpTarget)
+      this.camera.rotation.z += swayRoll
+    } else {
+      this.camera.lookAt(this.target)
     }
-    this.camera.lookAt(target)
 
     // мерцание экрана
     const flick = 1 + Math.sin(t * 31.3) * 0.015 + Math.sin(t * 7.1) * 0.02

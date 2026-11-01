@@ -1912,15 +1912,9 @@ export class Cctv {
     }
     this.prev.set(g.position.x, 0, g.position.z)
 
-    // смотрит на него: доворот только пока он далеко, вблизи взгляд заморожен —
-    // иначе корпус уводит в обороты вокруг него
-    if (dist > 1.4) {
-      const target = Math.atan2(m.position.x - g.position.x, m.position.z - g.position.z)
-      let d = (target - this.yaw) % (Math.PI * 2)
-      if (d > Math.PI) d -= Math.PI * 2
-      if (d < -Math.PI) d += Math.PI * 2
-      this.yaw += clamp(d, -0.9 * dt, 0.9 * dt)
-    }
+    // взгляд зафиксирован на весь кадр кино: он развёрнут к ней в начале
+    // сцены, доворотов нет — корпус не крутится ни при каких обстоятельствах
+    g.rotation.y = this.yaw
     this.yawDelta = 0 // вторичное скручивание корпуса на время кино выключено
     g.rotation.y = this.yaw
     // цели нет: walkPose не должен тянуть её взгляд к старому поручению
