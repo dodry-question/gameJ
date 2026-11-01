@@ -36,6 +36,8 @@ export class Room {
   private ending: 'none' | 'bag' | 'faint' | 'black' = 'none'
   private endingAt = 0
   private endOverlay: HTMLDivElement | null = null
+  private endFabric: HTMLCanvasElement | null = null
+  private fabricTile: HTMLCanvasElement | null = null
   private endText: HTMLDivElement | null = null
   private host: HTMLElement
   private tmpTarget = new THREE.Vector3()
@@ -371,25 +373,30 @@ export class Room {
   }
 
   /**
-   * Фаза концовки: 'bag' — на голову надевают мешок, голову трясёт; 'faint'
-   * — сознание медленно гаснет (чернота съедает кадр); 'black' — полная
-   * тьма, проявляется прощальный текст.
+   * Фаза концовки: 'bag' — на голову надевают мешок, экран затягивает
+   * тканью, сквозь структуру которой сочится свет монитора, а полотно
+   * крутится вместе с головой; 'faint' — ткань перестаёт пропускать свет,
+   * сознание гаснет; 'black' — полная тьма, проявляется прощальный текст.
    */
   setEnding(phase: 'bag' | 'faint' | 'black'): void {
     this.ending = phase
     this.endingAt = this.clock
     if (!this.endOverlay) {
       const ov = document.createElement('div')
-      ov.style.cssText =
-        'position:fixed;inset:0;background:#000;opacity:0;pointer-events:none;z-index:60'
+      // фон рисует канва ткани: див прозрачный, иначе он глушит всё чёрным
+      ov.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:60'
+      const cv = document.createElement('canvas')
+      cv.style.cssText = 'position:absolute;inset:0;width:100%;height:100%'
       const tx = document.createElement('div')
       tx.style.cssText =
         'position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;opacity:0;transition:opacity 2.2s;text-align:center;color:#cfd4cf;font-family:"Times New Roman",Times,serif'
       tx.innerHTML =
         '<div style="font-size:34px;font-weight:700;letter-spacing:0.1em">ВЫ ПРОШЛИ ИГРУ</div>' +
         '<div style="font-size:21px;margin-top:16px;color:#98a298;letter-spacing:0.06em">Спасибо Вам!</div>'
+      ov.appendChild(cv)
       ov.appendChild(tx)
       this.endText = tx
+      this.endFabric = cv
       this.endOverlay = ov
       this.host.appendChild(ov)
     }
@@ -428,10 +435,13 @@ export class Room {
     // мерцание экрана
     const flick = 1 + Math.sin(t * 31.3) * 0.015 + Math.sin(t * 7.1) * 0.02
     const dip = Math.max(0, Math.sin(t * 1.9) - 0.993) * 40
-    const lum = Math.max(0.85, 1 - dip * 0.15) * flick
+    let lum = Math.max(0.85, 1 - dip * 0.15) * flick
+    // сквозь мешок ЭЛТ жмёт к лицу и светит ярче: источник света у самой ткани
+    if (this.ending === 'bag') lum *= 2.8
+    else if (this.ending === 'faint') lum *= 2.2
     this.screenLight.intensity = 0.22 * lum
     this.screenMat.color.setRGB(0.98 * lum, 0.99 * lum, lum)
-    this.glow.material.opacity = 0.12 * lum
+    this.glow.material.opacity = (this.ending === 'none' ? 0.12 : 0.3) * lum
 
     // лампа на проводе
     const swing = 0.45 + 0.1 * Math.sin(t * 1.7) + 0.04 * Math.sin(t * 9.3)
@@ -449,14 +459,116 @@ export class Room {
 
     this.pass.uniforms.uTime.value = t
 
-    // затемнение концовки: сознание гаснет медленно, текст проявляется в тьме
-    const ov = this.endOverlay
-    if (ov) {
+    // концовка: мешок затягивает экран тканью, свет сочится сквозь структуру,
+    // полотно крутится с головой; на «faint» свет окончательно гаснет
+    if (this.endOverlay && this.ending !== 'none') this.drawFabric(t)
+    if (this.endText) {
       const e = this.clock - this.endingAt
-      if (this.ending === 'bag') ov.style.opacity = '0'
-      else if (this.ending === 'faint') ov.style.opacity = String(Math.min(1, e / 3.5))
-      else ov.style.opacity = '1'
-      if (this.endText) this.endText.style.opacity = this.ending === 'black' && e > 0.6 ? '1' : '0'
+      this.endText.style.opacity = this.ending === 'black' && e > 0.6 ? '1' : '0'
+    }
+  }
+
+  /** Ткань мешка: тёмное полотно с weave-структурой, свет сочится сквозь неё. */
+  private drawFabric(t: number): void {
+    const cv = this.endFabric
+    if (!cv) return
+    const w = window.innerWidth
+    const h = window.innerHeight
+    if (cv.width !== w || cv.height !== h) {
+      cv.width = w
+      cv.height = h
+    }
+    const c = cv.getContext('2d')
+    if (!c) return
+    const e = this.clock - this.endingAt
+
+    if (!this.fabricTile) {
+      // полотно: тёмные нити, светлее в разреженных местах — сквозь них
+      // и сочится свет монитора
+      const tile = document.createElement('canvas')
+      tile.width = 160
+      tile.height = 160
+      const tc = tile.getContext('2d')!
+      const img = tc.createImageData(160, 160)
+      for (let y = 0; y < 160; y++) {
+        for (let x = 0; x < 160; x++) {
+          const i = (y * 160 + x) * 4
+          const thread =
+            Math.sin(x * 0.42) * 7 + Math.sin(y * 0.39 + 1.7) * 7 + Math.sin((x + y) * 0.11) * 5
+          const fuzz = (Math.random() - 0.5) * 14
+          const v = Math.max(0, 16 + thread + fuzz)
+          img.data[i] = 5
+          img.data[i + 1] = 6
+          img.data[i + 2] = 5
+          img.data[i + 3] = Math.min(255, 66 + v) // светлые места — прозрачнее
+        }
+      }
+      tc.putImageData(img, 0, 0)
+      this.fabricTile = tile
+    }
+
+    c.clearRect(0, 0, w, h)
+    // фон: ткань тоньше там, где свет монитора прижимает её к лицу,
+    // к краям — плотнее; комната тонет, экран читается
+    const base = c.createRadialGradient(
+      w / 2,
+      h * 0.46,
+      0,
+      w / 2,
+      h * 0.46,
+      Math.min(w, h) * 0.75,
+    )
+    base.addColorStop(0, 'rgba(2, 3, 2, 0.22)')
+    base.addColorStop(0.55, 'rgba(2, 3, 2, 0.42)')
+    base.addColorStop(1, 'rgba(2, 3, 2, 0.78)')
+    c.fillStyle = base
+    c.fillRect(0, 0, w, h)
+
+    // полотно крутится с головой: медленный дрейф + рывки от борьбы
+    const fight = this.ending === 'bag' ? 1 : 0
+    const ang = Math.sin(t * 0.9) * 0.18 + Math.sin(t * 5.3) * 0.05 * fight
+    const drift = Math.sin(t * 1.7) * 12 + Math.sin(t * 7.1) * 8 * fight
+    const tile = this.fabricTile!
+    const pat = c.createPattern(tile, 'repeat')!
+    c.save()
+    c.translate(w / 2, h / 2)
+    c.rotate(ang)
+    c.translate(drift, -drift * 0.6)
+    c.translate(-w / 2, -h / 2)
+    const diag = Math.hypot(w, h)
+    c.fillStyle = pat
+    c.fillRect(w / 2 - diag / 2, h / 2 - diag / 2, diag, diag)
+    c.restore()
+
+    // свет монитора сочится неровно: мягкое пятно по центру чуть светлее
+    const glow = c.createRadialGradient(w / 2, h * 0.46, 0, w / 2, h * 0.46, Math.min(w, h) * 0.6)
+    const lum = 0.1 + Math.sin(t * 2.3) * 0.02 + Math.sin(t * 11) * 0.01
+    glow.addColorStop(0, `rgba(70, 96, 78, ${lum.toFixed(3)})`)
+    glow.addColorStop(1, 'rgba(0, 0, 0, 0)')
+    c.fillStyle = glow
+    c.fillRect(0, 0, w, h)
+
+    // складки по краям: полотна на голове много, к периферии темнее
+    const vig = c.createRadialGradient(
+      w / 2,
+      h / 2,
+      Math.min(w, h) * 0.28,
+      w / 2,
+      h / 2,
+      Math.hypot(w, h) * 0.6,
+    )
+    vig.addColorStop(0, 'rgba(0, 0, 0, 0)')
+    vig.addColorStop(1, 'rgba(0, 0, 0, 0.85)')
+    c.fillStyle = vig
+    c.fillRect(0, 0, w, h)
+
+    // сознание гаснет: свет сквозь ткань умирает за 3.5 секунды
+    if (this.ending === 'faint') {
+      c.fillStyle = `rgba(0, 0, 0, ${Math.min(1, e / 3.5).toFixed(3)})`
+      c.fillRect(0, 0, w, h)
+    } else if (this.ending === 'black') {
+      c.fillStyle = '#000'
+      c.fillRect(0, 0, w, h)
     }
   }
 

@@ -893,56 +893,126 @@ export class Sound {
   }
 
   /**
-   * Шаги за спиной оператора по скрипту: девять шагов за четыре секунды,
-   * каждый ближе и громче предыдущего — к концу источник стоит за затылком.
+   * Тяжёлые шаги за спиной по скрипту: девять подовых ударов за четыре
+   * секунды, каждый ближе и громче — к концу источник стоит за затылком.
+   * Удар весомый: низкий бум подвала + глухой стук пятки + скрип половицы.
    */
   approachSteps(): void {
     if (!this.ctx || !this.master || !this.noise) return
-    let when = 0.35
+    let when = 0.3
     let z = 2.9
     let x = 0.3
     for (let i = 0; i < 9; i++) {
       const k = i / 8
-      this.footstep(when, x + (Math.random() - 0.5) * 0.24, z, 0.1 + k * 0.5)
+      this.heavyStep(when, x + (Math.random() - 0.5) * 0.24, z, 0.22 + k * 0.85)
       when += 0.52 - k * 0.22 // темп ускоряется
-      z -= 0.28 // подбирается вплотную
+      z -= 0.3 // подбирается вплотную
       x -= 0.05
     }
   }
 
+  /** Один тяжёлый шаг: бум пола, стук пятки, скрип — вес слышен. */
+  private heavyStep(when: number, x: number, z: number, peak: number): void {
+    const ctx = this.ctx
+    const out = this.master
+    if (!ctx || !out || !this.noise) return
+    const t = ctx.currentTime + when
+
+    const panner = ctx.createPanner()
+    panner.panningModel = 'HRTF'
+    panner.distanceModel = 'inverse'
+    panner.refDistance = 1
+    panner.rolloffFactor = 0.4
+    if (panner.positionX) {
+      panner.positionX.value = x
+      panner.positionY.value = -0.25
+      panner.positionZ.value = z // сзади: слушатель смотрит в -Z
+    } else {
+      panner.setPosition(x, -0.25, z)
+    }
+    panner.connect(out)
+
+    // бум: пол прогибается под весом
+    const thump = ctx.createOscillator()
+    const tg = ctx.createGain()
+    thump.type = 'sine'
+    thump.frequency.setValueAtTime(64, t)
+    thump.frequency.exponentialRampToValueAtTime(36, t + 0.16)
+    tg.gain.setValueAtTime(0.0001, t)
+    tg.gain.linearRampToValueAtTime(peak, t + 0.012)
+    tg.gain.exponentialRampToValueAtTime(0.001, t + 0.3)
+    thump.connect(tg).connect(panner)
+    thump.start(t)
+    thump.stop(t + 0.32)
+
+    // стук пятки: резкий глухой щелчок
+    const heel = ctx.createBufferSource()
+    heel.buffer = this.noise
+    heel.playbackRate.value = 0.7
+    const hf = ctx.createBiquadFilter()
+    hf.type = 'lowpass'
+    hf.frequency.value = 210
+    const hg = ctx.createGain()
+    hg.gain.setValueAtTime(0.0001, t)
+    hg.gain.linearRampToValueAtTime(peak * 0.7, t + 0.006)
+    hg.gain.exponentialRampToValueAtTime(0.001, t + 0.09)
+    heel.connect(hf).connect(hg).connect(panner)
+    heel.start(t)
+    heel.stop(t + 0.1)
+
+    // половица скрипит под тяжестью
+    const creak = ctx.createBufferSource()
+    creak.buffer = this.noise
+    creak.playbackRate.value = 0.45 + Math.random() * 0.2
+    const cf = ctx.createBiquadFilter()
+    cf.type = 'bandpass'
+    cf.frequency.value = 330 + Math.random() * 240
+    cf.Q.value = 7
+    const cg = ctx.createGain()
+    const ct = t + 0.03
+    cg.gain.setValueAtTime(0.0001, ct)
+    cg.gain.linearRampToValueAtTime(peak * 0.32, ct + 0.05)
+    cg.gain.exponentialRampToValueAtTime(0.001, ct + 0.28)
+    creak.connect(cf).connect(cg).connect(panner)
+    creak.start(ct)
+    creak.stop(ct + 0.3)
+  }
+
   /**
-   * Приглушённый голос сквозь мешок: реальная запись крика (Wikimedia
-   * Commons, «NOW screaming», CC0), задавленная lowpass ~360 Гц — рот
-   * закрыт, кричать не получается, только глухие мычащие рывки.
+   * «ММФ!» — попытка закричать с закрытым ртом: короткий рывок из реального
+   * крика (Wikimedia Commons, «NOW screaming», CC0), опущенный на полтона
+   * и задавленный фильтрами до мычания сквозь ткань.
    */
-  suffocate(vol = 0.85, maxDur = 0): void {
+  mmph(vol = 0.95): void {
     const ctx = this.ctx
     const out = this.master
     if (!ctx || !out || !this.endScreamBuf) return
     const t = ctx.currentTime + 0.01
     const src = ctx.createBufferSource()
     src.buffer = this.endScreamBuf
-    src.playbackRate.value = 0.82
+    src.playbackRate.value = 0.55 // голос вниз: не крик, а мычание
     const lp = ctx.createBiquadFilter()
     lp.type = 'lowpass'
-    lp.frequency.value = 360
-    lp.Q.value = 0.8
+    lp.frequency.value = 620
+    lp.Q.value = 0.7
+    const hp = ctx.createBiquadFilter()
+    hp.type = 'highpass'
+    hp.frequency.value = 90
     const g = ctx.createGain()
-    const dur = maxDur > 0 ? Math.min(maxDur, this.endScreamBuf.duration) : this.endScreamBuf.duration
+    const dur = 0.22 + Math.random() * 0.14
     g.gain.setValueAtTime(0.0001, t)
-    g.gain.linearRampToValueAtTime(vol, t + 0.06)
-    g.gain.setValueAtTime(vol, t + dur * 0.65)
+    g.gain.linearRampToValueAtTime(vol, t + 0.025)
+    g.gain.setValueAtTime(vol, t + dur * 0.6)
     g.gain.exponentialRampToValueAtTime(0.001, t + dur)
-    src.connect(lp).connect(g).connect(out)
-    src.start(t, Math.random() * 0.4)
-    src.stop(t + dur + 0.05)
+    src.connect(lp).connect(hp).connect(g).connect(out)
+    src.start(t, 0.4 + Math.random() * 1.4, dur + 0.05)
   }
 
   /**
-   * Рваные вдохи: он пытается дышать и не может — мужское дыхание на
-   * ускоренном темпе, пока борется. Тот же CC0-файл, что и в кино провала.
+   * Рваные вдохи сквозь ткань: дышать получается плохо. Мужское дыхание
+   * (CC0) — темп и громкость скромные, на первом месте попытки кричать.
    */
-  startGasping(): void {
+  startGasping(rate = 1.15, vol = 0.32): void {
     const ctx = this.ctx
     if (!ctx || !this.master) return
     const start = (buf: AudioBuffer): void => {
@@ -950,10 +1020,10 @@ export class Sound {
       const src = ctx.createBufferSource()
       src.buffer = buf
       src.loop = true
-      src.playbackRate.value = 1.7
+      src.playbackRate.value = rate
       const g = ctx.createGain()
       g.gain.setValueAtTime(0.0001, ctx.currentTime)
-      g.gain.linearRampToValueAtTime(0.55, ctx.currentTime + 0.3)
+      g.gain.linearRampToValueAtTime(vol, ctx.currentTime + 0.4)
       src.connect(g).connect(this.master!)
       src.start()
       this.gaspSrc = src

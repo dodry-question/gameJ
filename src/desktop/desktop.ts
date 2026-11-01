@@ -231,8 +231,7 @@ export class Desktop {
   private endingPhase: 'none' | 'watch' | 'bag' | 'faint' | 'black' = 'none'
   private endingAt = 0
   private endSteps = false
-  private endG1 = false
-  private endG2 = false
+  private endGrunts = 0
   /** Фазу концовки получает 3D-сцена: тряска головы, чернота, текст. */
   endingFx?: (phase: 'bag' | 'faint' | 'black') => void
   /** Сколько строк [!!] терминала уже озвучено ошибкой. */
@@ -1648,9 +1647,8 @@ export class Desktop {
     this.endingPhase = phase
     this.endingAt = performance.now()
     if (phase === 'bag') {
-      // мешок: глухие мычащие попытки закричать + рваные вдохи + музыка
-      this.sound.suffocate(0.9)
-      this.sound.startGasping()
+      // мешок: рваные «ммф» сквозь ткань + плохие вдохи + давящая музыка
+      this.sound.startGasping(1.15, 0.32)
       this.sound.playTututu()
     } else if (phase === 'faint') {
       // сознание уходит: вдохи гаснут, комнатный фон тонет, музыка остаётся
@@ -1670,14 +1668,11 @@ export class Desktop {
       }
       if (t >= 4.4) this.endNext('bag')
     } else if (this.endingPhase === 'bag') {
-      // дёргается и мычит, пока может
-      if (t >= 2.3 && !this.endG1) {
-        this.endG1 = true
-        this.sound.suffocate(0.75, 0.65)
-      }
-      if (t >= 3.9 && !this.endG2) {
-        this.endG2 = true
-        this.sound.suffocate(0.6, 0.5)
+      // пытается закричать с закрытым ртом: рывки «ммф», пока может
+      const grunts = [0.12, 1.15, 2.45, 3.75]
+      if (this.endGrunts < grunts.length && t >= grunts[this.endGrunts]) {
+        this.endGrunts++
+        this.sound.mmph(0.75 + Math.random() * 0.25)
       }
       if (t >= 5.4) this.endNext('faint')
     } else if (this.endingPhase === 'faint') {
