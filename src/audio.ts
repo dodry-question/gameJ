@@ -99,7 +99,6 @@ export class Sound {
       // принтер и голоса грузим заранее: печать и крик обязаны звучать сразу
       this.loadPrinter()
       void this.grabVoice('sounds/voice/cry.ogg').then((b) => (this.girlCryBuf = b))
-      void this.grabVoice('sounds/scream.ogg').then((b) => (this.endScreamBuf = b))
       void this.grabVoice('sounds/tututu.ogg').then((b) => (this.tututuBuf = b))
       void this.grabVoice('sounds/girl-scream.mp3').then((b) => (this.girlFinalBuf = b))
     } catch {
@@ -869,12 +868,10 @@ export class Sound {
   // ── концовка: крик девушки, шаги в спину, мешок ───────────────────
 
   private girlCryBuf: AudioBuffer | null = null
-  private endScreamBuf: AudioBuffer | null = null
   private tututuBuf: AudioBuffer | null = null
   private girlFinalBuf: AudioBuffer | null = null
   private tututuSrc: AudioBufferSourceNode | null = null
-  private gaspSrc: AudioBufferSourceNode | null = null
-  private gaspGain: GainNode | null = null
+  private tututuGain: GainNode | null = null
 
   /**
    * Она гарантированно вскрикивает, когда её отвязывают: запись плача идёт
@@ -1004,97 +1001,64 @@ export class Sound {
   }
 
   /**
-   * «ММФ!» — попытка закричать с закрытым ртом: короткий рывок из реального
-   * крика (Wikimedia Commons, «NOW screaming», CC0), опущенный на полтона
-   * и задавленный фильтрами до мычания сквозь ткань.
+   * Тяжёлый удар чем-то по голове: низкий бум, резкий треск и глухое тело
+   * удара. Один удар — дальше темнота.
    */
-  mmph(vol = 0.95): void {
+  headHit(): void {
     const ctx = this.ctx
     const out = this.master
-    if (!ctx || !out || !this.endScreamBuf) return
-    const t = ctx.currentTime + 0.01
-    const src = ctx.createBufferSource()
-    src.buffer = this.endScreamBuf
-    src.playbackRate.value = 0.55 // голос вниз: не крик, а мычание
-    const lp = ctx.createBiquadFilter()
-    lp.type = 'lowpass'
-    lp.frequency.value = 620
-    lp.Q.value = 0.7
-    const hp = ctx.createBiquadFilter()
-    hp.type = 'highpass'
-    hp.frequency.value = 90
-    const g = ctx.createGain()
-    const dur = 0.22 + Math.random() * 0.14
-    g.gain.setValueAtTime(0.0001, t)
-    g.gain.linearRampToValueAtTime(vol, t + 0.025)
-    g.gain.setValueAtTime(vol, t + dur * 0.6)
-    g.gain.exponentialRampToValueAtTime(0.001, t + dur)
-    src.connect(lp).connect(hp).connect(g).connect(out)
-    src.start(t, 0.4 + Math.random() * 1.4, dur + 0.05)
+    if (!ctx || !out || !this.noise) return
+    const t = ctx.currentTime + 0.005
+
+    // бум: черепная полость
+    const thump = ctx.createOscillator()
+    const tg = ctx.createGain()
+    thump.type = 'sine'
+    thump.frequency.setValueAtTime(110, t)
+    thump.frequency.exponentialRampToValueAtTime(38, t + 0.14)
+    tg.gain.setValueAtTime(0.0001, t)
+    tg.gain.linearRampToValueAtTime(1.0, t + 0.01)
+    tg.gain.exponentialRampToValueAtTime(0.001, t + 0.42)
+    thump.connect(tg).connect(out)
+    thump.start(t)
+    thump.stop(t + 0.44)
+
+    // треск: сам удар
+    const crack = ctx.createBufferSource()
+    crack.buffer = this.noise
+    crack.playbackRate.value = 1.1
+    const cf = ctx.createBiquadFilter()
+    cf.type = 'bandpass'
+    cf.frequency.value = 950
+    cf.Q.value = 0.9
+    const cg = ctx.createGain()
+    cg.gain.setValueAtTime(0.55, t)
+    cg.gain.exponentialRampToValueAtTime(0.001, t + 0.05)
+    crack.connect(cf).connect(cg).connect(out)
+    crack.start(t)
+    crack.stop(t + 0.06)
+
+    // глухое тело удара: затухание в дереве/ткани
+    const body = ctx.createBufferSource()
+    body.buffer = this.noise
+    body.playbackRate.value = 0.5
+    const bf = ctx.createBiquadFilter()
+    bf.type = 'lowpass'
+    bf.frequency.value = 300
+    const bg = ctx.createGain()
+    bg.gain.setValueAtTime(0.0001, t + 0.01)
+    bg.gain.linearRampToValueAtTime(0.4, t + 0.03)
+    bg.gain.exponentialRampToValueAtTime(0.001, t + 0.38)
+    body.connect(bf).connect(bg).connect(out)
+    body.start(t)
+    body.stop(t + 0.4)
   }
 
   /**
-   * Рваные вдохи сквозь ткань: дышать получается плохо. Мужское дыхание
-   * (CC0) — темп и громкость скромные, на первом месте попытки кричать.
+   * «Тутуту» — давящая музыка концовки (файл пользователя). После удара
+   * звучит тихо; к появлению прощального текста доходит до максимума.
    */
-  startGasping(rate = 1.15, vol = 0.32): void {
-    const ctx = this.ctx
-    if (!ctx || !this.master) return
-    const start = (buf: AudioBuffer): void => {
-      if (this.gaspSrc) return
-      const src = ctx.createBufferSource()
-      src.buffer = buf
-      src.loop = true
-      src.playbackRate.value = rate
-      const g = ctx.createGain()
-      g.gain.setValueAtTime(0.0001, ctx.currentTime)
-      g.gain.linearRampToValueAtTime(vol, ctx.currentTime + 0.4)
-      src.connect(g).connect(this.master!)
-      src.start()
-      this.gaspSrc = src
-      this.gaspGain = g
-    }
-    if (this.breathMan) start(this.breathMan)
-    else if (!this.breathManLoading) {
-      this.breathManLoading = true
-      void this.grabVoice('sounds/breath-man.mp3')
-        .then((b) => {
-          this.breathMan = b
-          this.breathManLoading = false
-          start(b)
-        })
-        .catch(() => {
-          this.breathManLoading = false
-        })
-    }
-  }
-
-  /** Вдохи гаснут: сознание покидает его. */
-  stopGasping(): void {
-    const g = this.gaspGain
-    const src = this.gaspSrc
-    const ctx = this.ctx
-    if (!g || !src || !ctx) return
-    const t = ctx.currentTime
-    g.gain.cancelScheduledValues(t)
-    g.gain.setValueAtTime(Math.max(g.gain.value, 0.0001), t)
-    g.gain.linearRampToValueAtTime(0.0001, t + 1.6)
-    window.setTimeout(() => {
-      try {
-        src.stop()
-      } catch {
-        // уже остановлен
-      }
-    }, 1800)
-    this.gaspSrc = null
-    this.gaspGain = null
-  }
-
-  /**
-   * «Тутуту» — давящая музыка концовки (файл пользователя), начинается в
-   * момент мешка и остаётся одна в темноте. Играет в луп до перезагрузки.
-   */
-  playTututu(): void {
+  playTututu(vol = 0.14): void {
     const ctx = this.ctx
     const out = this.master
     if (!ctx || !out || !this.tututuBuf || this.tututuSrc) return
@@ -1104,10 +1068,22 @@ export class Sound {
     const g = ctx.createGain()
     const t = ctx.currentTime
     g.gain.setValueAtTime(0.0001, t)
-    g.gain.linearRampToValueAtTime(0.55, t + 1.2)
+    g.gain.linearRampToValueAtTime(vol, t + 0.8)
     src.connect(g).connect(out)
     src.start(t)
     this.tututuSrc = src
+    this.tututuGain = g
+  }
+
+  /** Музыка дожимает до предела: текст на чёрном экране. */
+  tututuMax(): void {
+    const ctx = this.ctx
+    const g = this.tututuGain
+    if (!ctx || !g) return
+    const t = ctx.currentTime
+    g.gain.cancelScheduledValues(t)
+    g.gain.setValueAtTime(Math.max(g.gain.value, 0.0001), t)
+    g.gain.linearRampToValueAtTime(0.95, t + 1.6)
   }
 
   // ── модем ────────────────────────────────────────────────────────

@@ -264,12 +264,11 @@ export class Desktop {
   /** Отладка ?power уже отработала. */
   private debugPowerDone = false
   /** Концовка: она ушла — а за спиной оператора уже стоят. */
-  private endingPhase: 'none' | 'watch' | 'bag' | 'faint' | 'black' = 'none'
+  private endingPhase: 'none' | 'watch' | 'hit' | 'black' = 'none'
   private endingAt = 0
   private endSteps = false
-  private endGrunts = 0
-  /** Фазу концовки получает 3D-сцена: тряска головы, чернота, текст. */
-  endingFx?: (phase: 'bag' | 'faint' | 'black') => void
+  /** Фазу концовки получает 3D-сцена: удар, штора темноты, текст. */
+  endingFx?: (phase: 'hit' | 'black') => void
   /** Сколько строк [!!] терминала уже озвучено ошибкой. */
   private cmdSounds = 0
   /** Загрузочный экран Win2000: играет один раз при старте, клик пропускает. */
@@ -1682,17 +1681,17 @@ export class Desktop {
     this.dirty = true
   }
 
-  private endNext(phase: 'bag' | 'faint' | 'black'): void {
+  private endNext(phase: 'hit' | 'black'): void {
     this.endingPhase = phase
     this.endingAt = performance.now()
-    if (phase === 'bag') {
-      // мешок: рваные «ммф» сквозь ткань + плохие вдохи + давящая музыка
-      this.sound.startGasping(1.15, 0.32)
+    if (phase === 'hit') {
+      // удар тяжёлым по голове: звук, штора темноты сверху вниз, музыка
+      // вступает тихо — на прощальном тексте дожмёт до предела
+      this.sound.headHit()
       this.sound.playTututu()
-    } else if (phase === 'faint') {
-      // сознание уходит: вдохи гаснут, комнатный фон тонет, музыка остаётся
-      this.sound.stopGasping()
       this.sound.fadeOutAmbient()
+    } else if (phase === 'black') {
+      this.sound.tututuMax()
     }
     this.endingFx?.(phase)
     this.dirty = true
@@ -1705,17 +1704,10 @@ export class Desktop {
         this.endSteps = true
         this.sound.approachSteps()
       }
-      if (t >= 4.4) this.endNext('bag')
-    } else if (this.endingPhase === 'bag') {
-      // пытается закричать с закрытым ртом: рывки «ммф», пока может
-      const grunts = [0.12, 1.15, 2.45, 3.75]
-      if (this.endGrunts < grunts.length && t >= grunts[this.endGrunts]) {
-        this.endGrunts++
-        this.sound.mmph(0.75 + Math.random() * 0.25)
-      }
-      if (t >= 5.4) this.endNext('faint')
-    } else if (this.endingPhase === 'faint') {
-      if (t >= 3.6) this.endNext('black')
+      if (t >= 4.4) this.endNext('hit')
+    } else if (this.endingPhase === 'hit') {
+      // сознание теряется мгновенно: через секунду с четвертью — чернота
+      if (t >= 1.3) this.endNext('black')
     } else if (this.endingPhase === 'black') {
       // текст проявился: клик перезапускает смену
       if (t >= 2.4 && !this.girlDead) {

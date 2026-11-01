@@ -32,19 +32,14 @@ export class Room {
   private target = new THREE.Vector3(0, 0.195, 0.07)
   private look = new THREE.Vector2()
   private clock = 0
-  /** Фаза концовки: тряска головы мешком, потеря сознания, чернота. */
-  private ending: 'none' | 'bag' | 'faint' | 'black' = 'none'
+  /** Фаза концовки: удар — штора темноты сверху вниз, голова падает на клавиатуру. */
+  private ending: 'none' | 'hit' | 'black' = 'none'
   private endingAt = 0
   private endOverlay: HTMLDivElement | null = null
-  private endFabric: HTMLCanvasElement | null = null
-  private fabricTile: HTMLCanvasElement | null = null
+  private endCurtain: HTMLCanvasElement | null = null
   private endText: HTMLDivElement | null = null
   private host: HTMLElement
   private tmpTarget = new THREE.Vector3()
-  /** Последнее положение головы в мешке — застывает при потере сознания. */
-  private endSwayYaw = 0
-  private endSwayPitch = 0
-  private endSwayRoll = 0
 
   constructor(host: HTMLElement, desktop: HTMLCanvasElement) {
     this.host = host
@@ -377,17 +372,16 @@ export class Room {
   }
 
   /**
-   * Фаза концовки: 'bag' — на голову надевают мешок, экран затягивает
-   * тканью, сквозь структуру которой сочится свет монитора, а полотно
-   * крутится вместе с головой; 'faint' — ткань перестаёт пропускать свет,
-   * сознание гаснет; 'black' — полная тьма, проявляется прощальный текст.
+   * Фаза концовки: 'hit' — удар по голове, экран резко темнеет сверху вниз,
+   * голова падает вперёд на клавиатуру; 'black' — полная тьма, проявляется
+   * прощальный текст.
    */
-  setEnding(phase: 'bag' | 'faint' | 'black'): void {
+  setEnding(phase: 'hit' | 'black'): void {
     this.ending = phase
     this.endingAt = this.clock
     if (!this.endOverlay) {
       const ov = document.createElement('div')
-      // фон рисует канва ткани: див прозрачный, иначе он глушит всё чёрным
+      // темноту рисует канва шторы: див прозрачный
       ov.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:60'
       const cv = document.createElement('canvas')
       cv.style.cssText = 'position:absolute;inset:0;width:100%;height:100%'
@@ -400,7 +394,7 @@ export class Room {
       ov.appendChild(cv)
       ov.appendChild(tx)
       this.endText = tx
-      this.endFabric = cv
+      this.endCurtain = cv
       this.endOverlay = ov
       this.host.appendChild(ov)
     }
@@ -412,45 +406,28 @@ export class Room {
 
     // параллакс: еле заметный, чтобы экран не качался как лодка
     const k = 1 - Math.pow(0.06, dt)
-    // концовка: голову водит из стороны в сторону, в самом конце она
-    // запрокидывается к потолку и застывает — сознание уходит
-    let swayYaw = 0
-    let swayPitch = 0
-    let swayRoll = 0
-    if (this.ending === 'bag') {
+    // концовка: удар — голова падает вперёд и вниз, на клавиатуру, и застывает
+    let headPitch = 0
+    if (this.ending === 'hit') {
       const e = this.clock - this.endingAt
-      swayYaw = Math.sin(e * 1.5) * 0.15 + Math.sin(e * 0.73) * 0.07
-      swayRoll = Math.sin(e * 1.05 + 1.2) * 0.055
-      swayPitch = Math.sin(e * 2.1 + 0.5) * 0.02
-      if (e > 3.9) {
-        const p = Math.min(1, (e - 3.9) / 1.5)
-        swayPitch += p * p * (3 - 2 * p) * 0.52 // валится затылком к потолку
-      }
-      this.endSwayYaw = swayYaw
-      this.endSwayPitch = swayPitch
-      this.endSwayRoll = swayRoll
-    } else if (this.ending === 'faint' || this.ending === 'black') {
-      // голова обмякла: застыла в последнем положении, запрокинута к потолку
-      swayYaw = this.endSwayYaw
-      swayPitch = Math.max(this.endSwayPitch, 0.52)
-      swayRoll = this.endSwayRoll
+      const p = Math.min(1, e / 0.55)
+      headPitch = (p * p * (3 - 2 * p)) * 0.5 // вниз, на клавиатуру
+    } else if (this.ending === 'black') {
+      headPitch = 0.5 // обмякла: лежит лицом в клавиатуру
     }
     this.camera.position.x += (this.eye.x + this.look.x * 0.0045 - this.camera.position.x) * k
     this.camera.position.y +=
       (this.eye.y + this.look.y * 0.003 + Math.sin(t * 0.55) * 0.0004 - this.camera.position.y) * k
     if (this.ending !== 'none') {
-      // взгляд собирается из углов: база — в монитор, поверх — покачивание
       const len = 0.36
-      const yaw = Math.PI + swayYaw
-      const pitch = -0.17 + swayPitch
+      const yaw = Math.PI
+      const pitch = -0.17 + headPitch
       this.tmpTarget.set(
         this.camera.position.x + Math.sin(yaw) * Math.cos(pitch) * len,
         this.camera.position.y + Math.sin(pitch) * len,
         this.camera.position.z + Math.cos(yaw) * Math.cos(pitch) * len,
       )
-      this.camera.rotation.z = swayRoll
       this.camera.lookAt(this.tmpTarget)
-      this.camera.rotation.z += swayRoll
     } else {
       this.camera.lookAt(this.target)
     }
@@ -458,13 +435,10 @@ export class Room {
     // мерцание экрана
     const flick = 1 + Math.sin(t * 31.3) * 0.015 + Math.sin(t * 7.1) * 0.02
     const dip = Math.max(0, Math.sin(t * 1.9) - 0.993) * 40
-    let lum = Math.max(0.85, 1 - dip * 0.15) * flick
-    // сквозь мешок ЭЛТ жмёт к лицу и светит ярче: источник света у самой ткани
-    if (this.ending === 'bag') lum *= 2.8
-    else if (this.ending === 'faint') lum *= 2.2
+    const lum = Math.max(0.85, 1 - dip * 0.15) * flick
     this.screenLight.intensity = 0.22 * lum
     this.screenMat.color.setRGB(0.98 * lum, 0.99 * lum, lum)
-    this.glow.material.opacity = (this.ending === 'none' ? 0.12 : 0.3) * lum
+    this.glow.material.opacity = 0.12 * lum
 
     // лампа на проводе
     const swing = 0.45 + 0.1 * Math.sin(t * 1.7) + 0.04 * Math.sin(t * 9.3)
@@ -482,18 +456,17 @@ export class Room {
 
     this.pass.uniforms.uTime.value = t
 
-    // концовка: мешок затягивает экран тканью, свет сочится сквозь структуру,
-    // полотно крутится с головой; на «faint» свет окончательно гаснет
-    if (this.endOverlay && this.ending !== 'none') this.drawFabric(t)
+    // концовка: чёрная штора резко опускается сверху вниз, текст — в тьме
+    if (this.endOverlay && this.ending !== 'none') this.drawCurtain()
     if (this.endText) {
       const e = this.clock - this.endingAt
-      this.endText.style.opacity = this.ending === 'black' && e > 0.6 ? '1' : '0'
+      this.endText.style.opacity = this.ending === 'black' && e > 0.5 ? '1' : '0'
     }
   }
 
-  /** Ткань мешка: тёмное полотно с weave-структурой, свет сочится сквозь неё. */
-  private drawFabric(t: number): void {
-    const cv = this.endFabric
+  /** Штора темноты: резко опускается сверху вниз и накрывает экран целиком. */
+  private drawCurtain(): void {
+    const cv = this.endCurtain
     if (!cv) return
     const w = window.innerWidth
     const h = window.innerHeight
@@ -504,94 +477,18 @@ export class Room {
     const c = cv.getContext('2d')
     if (!c) return
     const e = this.clock - this.endingAt
-
-    if (!this.fabricTile) {
-      // полотно: тёмные нити, светлее в разреженных местах — сквозь них
-      // и сочится свет монитора
-      const tile = document.createElement('canvas')
-      tile.width = 160
-      tile.height = 160
-      const tc = tile.getContext('2d')!
-      const img = tc.createImageData(160, 160)
-      for (let y = 0; y < 160; y++) {
-        for (let x = 0; x < 160; x++) {
-          const i = (y * 160 + x) * 4
-          const thread =
-            Math.sin(x * 0.42) * 7 + Math.sin(y * 0.39 + 1.7) * 7 + Math.sin((x + y) * 0.11) * 5
-          const fuzz = (Math.random() - 0.5) * 14
-          const v = Math.max(0, 16 + thread + fuzz)
-          img.data[i] = 5
-          img.data[i + 1] = 6
-          img.data[i + 2] = 5
-          img.data[i + 3] = Math.min(255, 66 + v) // светлые места — прозрачнее
-        }
-      }
-      tc.putImageData(img, 0, 0)
-      this.fabricTile = tile
-    }
-
     c.clearRect(0, 0, w, h)
-    // фон: ткань тоньше там, где свет монитора прижимает её к лицу,
-    // к краям — плотнее; комната тонет, экран читается
-    const base = c.createRadialGradient(
-      w / 2,
-      h * 0.46,
-      0,
-      w / 2,
-      h * 0.46,
-      Math.min(w, h) * 0.75,
-    )
-    base.addColorStop(0, 'rgba(2, 3, 2, 0.22)')
-    base.addColorStop(0.55, 'rgba(2, 3, 2, 0.42)')
-    base.addColorStop(1, 'rgba(2, 3, 2, 0.78)')
-    c.fillStyle = base
-    c.fillRect(0, 0, w, h)
-
-    // полотно крутится с головой: медленный дрейф + рывки от борьбы
-    const fight = this.ending === 'bag' ? 1 : 0
-    const ang = Math.sin(t * 0.9) * 0.18 + Math.sin(t * 5.3) * 0.05 * fight
-    const drift = Math.sin(t * 1.7) * 12 + Math.sin(t * 7.1) * 8 * fight
-    const tile = this.fabricTile!
-    const pat = c.createPattern(tile, 'repeat')!
-    c.save()
-    c.translate(w / 2, h / 2)
-    c.rotate(ang)
-    c.translate(drift, -drift * 0.6)
-    c.translate(-w / 2, -h / 2)
-    const diag = Math.hypot(w, h)
-    c.fillStyle = pat
-    c.fillRect(w / 2 - diag / 2, h / 2 - diag / 2, diag, diag)
-    c.restore()
-
-    // свет монитора сочится неровно: мягкое пятно по центру чуть светлее
-    const glow = c.createRadialGradient(w / 2, h * 0.46, 0, w / 2, h * 0.46, Math.min(w, h) * 0.6)
-    const lum = 0.1 + Math.sin(t * 2.3) * 0.02 + Math.sin(t * 11) * 0.01
-    glow.addColorStop(0, `rgba(70, 96, 78, ${lum.toFixed(3)})`)
-    glow.addColorStop(1, 'rgba(0, 0, 0, 0)')
-    c.fillStyle = glow
-    c.fillRect(0, 0, w, h)
-
-    // складки по краям: полотна на голове много, к периферии темнее
-    const vig = c.createRadialGradient(
-      w / 2,
-      h / 2,
-      Math.min(w, h) * 0.28,
-      w / 2,
-      h / 2,
-      Math.hypot(w, h) * 0.6,
-    )
-    vig.addColorStop(0, 'rgba(0, 0, 0, 0)')
-    vig.addColorStop(1, 'rgba(0, 0, 0, 0.85)')
-    c.fillStyle = vig
-    c.fillRect(0, 0, w, h)
-
-    // сознание гаснет: свет сквозь ткань умирает за 3.5 секунды
-    if (this.ending === 'faint') {
-      c.fillStyle = `rgba(0, 0, 0, ${Math.min(1, e / 3.5).toFixed(3)})`
-      c.fillRect(0, 0, w, h)
-    } else if (this.ending === 'black') {
-      c.fillStyle = '#000'
-      c.fillRect(0, 0, w, h)
+    const p = Math.min(1, e / 0.45)
+    const drop = p * p * (3 - 2 * p) * h
+    c.fillStyle = '#000'
+    c.fillRect(0, 0, w, drop)
+    if (drop < h) {
+      // нижняя кромка шторы: чуть мягче, но всё равно резко
+      const lip = c.createLinearGradient(0, drop, 0, drop + 14)
+      lip.addColorStop(0, 'rgba(0, 0, 0, 0.9)')
+      lip.addColorStop(1, 'rgba(0, 0, 0, 0)')
+      c.fillStyle = lip
+      c.fillRect(0, drop, w, 14)
     }
   }
 
